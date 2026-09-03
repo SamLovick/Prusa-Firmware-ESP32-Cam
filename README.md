@@ -1,5 +1,18 @@
 # PrusaConnect ESP32-CAM
 
+> ## ⚡ Variant branch: `xiao-esp32s3-ov5640`
+> This branch is a customised build of the upstream firmware (base **v1.1.2**) for the
+> **Seeed Studio XIAO ESP32-S3 Sense** board fitted with an **OV5640** autofocus camera.
+> It adds OV5640 autofocus, software digital zoom + pan/tilt, an exposure lock,
+> fine image tuning, save/restore presets, on-device SD recovery/file management,
+> PrusaLink auto-timelapse, and more. See **[ESP32_PrusaConnectCam/CHANGELOG.md](ESP32_PrusaConnectCam/CHANGELOG.md)**
+> for the full, dated list of every change (variant version `1.1.2-xiao-ov5640.NN`).
+>
+> **Before building:** set your WiFi SSID/password (and printer IP) in
+> `ESP32_PrusaConnectCam/mcu_cfg.h` — the committed values are placeholders.
+> Board: `XIAO_ESP32S3`, PSRAM `OPI`, Flash `8MB`, Partition `default_8MB`.
+> Pre-built binaries are **not** committed (they would embed WiFi credentials).
+
 This repository includes source code and firmware releases for the **ESP32-cam** module programmed in the **Arduino IDE**. Currently, several versions of boards built on **ESP32/ESP32S3** processors with a camera chip are supported. You can find a list of supported boards below. Additionally, for each supported board, there is a guide on how to upload the firmware, how to compile code for it, some basic information and a list of known issues for this particular board.
 
 This project uses other libraries. It is necessary to install them in the Arduino IDE:

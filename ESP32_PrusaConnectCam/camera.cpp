@@ -12,6 +12,11 @@
    @bug: no know bug
 */
 #include "camera.h"
+#include "ov5640_af.h"
+#include <Preferences.h>
+
+#define CAM_PRESET_NS   "campreset"   ///< NVS namespace for the saved camera-settings preset
+#define CAM_PTZ_NS      "camptz"      ///< NVS namespace for the persisted live zoom/pan/tilt
 
 Camera SystemCamera(&SystemConfig, &SystemLog, FLASH_GPIO_NUM);
 
@@ -49,6 +54,9 @@ Camera::Camera(Configuration* i_conf, Logs* i_log, int8_t i_FlashPin) {
   PhotoExifData.offset = 0;
   PhotoSending = false;
   CameraCaptureFailedCounter = 0;
+  zoom = 100;
+  panPos = 50;
+  tiltPos = 50;
 }
 
 /**
@@ -74,6 +82,22 @@ void Camera::Init() {
   InitCameraModule();
   ApplyCameraCfg();
   GetCameraModel();
+  InitAutofocus();
+}
+
+/**
+   @brief Init OV5640 autofocus. Uploads the AF firmware to the sensor MCU
+          when an OV5640 is detected. Safe no-op for other sensors.
+   @param none
+   @return none
+*/
+void Camera::InitAutofocus() {
+#if (defined(ENABLE_OV5640_AUTOFOCUS) && (true == ENABLE_OV5640_AUTOFOCUS))
+  if (sensor != NULL) {
+    log->AddEvent(LogLevel_Info, F("Init autofocus, sensor PID: 0x"), String(sensor->id.PID, HEX));
+    OV5640_LoadAfFirmware(sensor);  // internally checks driver AF support
+  }
+#endif
 }
 
 /**
@@ -107,7 +131,11 @@ void Camera::InitCameraModule() {
   CameraConfig.pin_sccb_scl = SIOC_GPIO_NUM;
   CameraConfig.pin_pwdn = PWDN_GPIO_NUM;
   CameraConfig.pin_reset = RESET_GPIO_NUM;
+#if (defined(ENABLE_OV5640_AUTOFOCUS) && (true == ENABLE_OV5640_AUTOFOCUS))
+  CameraConfig.xclk_freq_hz = 16000000;       // 16 MHz - recommended for OV5640
+#else
   CameraConfig.xclk_freq_hz = 15000000;       // or 3000000; 16500000; 20000000
+#endif
   CameraConfig.pixel_format = PIXFORMAT_JPEG; /* YUV422,GRAYSCALE,RGB565,JPEG */
 
   /* OV2640
@@ -181,6 +209,8 @@ void Camera::LoadCameraCfgFromEeprom() {
   CameraFlashEnable = config->LoadCameraFlashEnable();
   CameraFlashTime = config->LoadCameraFlashTime();
   imageExifRotation = config->LoadCameraImageExifRotation();
+  /* restore persisted zoom/pan/tilt (framesize is set above, so zoom clamps) */
+  LoadPtzFromNvs();
 }
 
 /**
@@ -211,6 +241,15 @@ framesize_t Camera::TransformFrameSizeDataType(uint8_t i_data) {
       break;
     case 6:
       ret = FRAMESIZE_UXGA;
+      break;
+    case 7:
+      ret = FRAMESIZE_FHD;    /* 1920x1080 - OV5640 */
+      break;
+    case 8:
+      ret = FRAMESIZE_QXGA;   /* 2048x1536 - OV5640 */
+      break;
+    case 9:
+      ret = FRAMESIZE_QSXGA;  /* 2592x1944 - OV5640 */
       break;
     default:
       ret = FRAMESIZE_QVGA;
@@ -300,9 +339,32 @@ void Camera::ApplyCameraCfg() {
 
   /* sensor configuration */
   sensor = esp_camera_sensor_get();
-  sensor->set_brightness(sensor, brightness);         // -2 to 2
-  sensor->set_contrast(sensor, contrast);             // -2 to 2
-  sensor->set_saturation(sensor, saturation);         // -2 to 2
+
+  /* Set the readout window / zoom FIRST. Changing the window (set_res_raw)
+     resets ISP state (white balance etc.), so all the settings below are then
+     applied on top of the final window - otherwise a zoom leaves a colour cast. */
+  ApplyZoomWindow();
+
+  /* Brightness/contrast/saturation: the driver only exposes -2..2 (very coarse).
+     Call it first with a rough mapping so the OV5640 SDE block stays enabled,
+     then overwrite the ISP magnitude registers directly for FINE control. The
+     sliders now use a wide range (brightness/saturation -64..64, contrast
+     -24..24) that maps onto the 0..255 ISP registers. Neutral = 0. */
+  sensor->set_brightness(sensor, constrain(brightness / 32, -2, 2));
+  sensor->set_contrast(sensor, constrain(contrast / 16, -2, 2));
+  sensor->set_saturation(sensor, constrain(saturation / 32, -2, 2));
+  if (sensor->set_reg != NULL) {
+    int bmag = (brightness < 0) ? -brightness : brightness;
+    if (bmag > 255) bmag = 255;
+    sensor->set_reg(sensor, 0x5587, 0xFF, bmag);                            // Y brightness magnitude
+    sensor->set_reg(sensor, 0x5588, 0xFF, (brightness < 0) ? 0x09 : 0x01);  // Y brightness sign
+    int cv = 0x20 + contrast;  if (cv < 0) cv = 0;  if (cv > 255) cv = 255;
+    sensor->set_reg(sensor, 0x5586, 0xFF, cv);                             // contrast gain (0x20 = neutral)
+    sensor->set_reg(sensor, 0x5585, 0xFF, 0x00);                          // contrast Y offset
+    int sv = 0x40 + saturation;  if (sv < 0) sv = 0;  if (sv > 255) sv = 255;
+    sensor->set_reg(sensor, 0x5583, 0xFF, sv);                            // saturation U (0x40 = neutral)
+    sensor->set_reg(sensor, 0x5584, 0xFF, sv);                            // saturation V
+  }
   sensor->set_special_effect(sensor, 0);              // 0 to 6 (0 - No Effect, 1 - Negative, 2 - Grayscale, 3 - Red Tint, 4 - Green Tint, 5 - Blue Tint, 6 - Sepia)
   sensor->set_whitebal(sensor, awb);                  // automatic white balancing 0 = disable , 1 = enable
   sensor->set_awb_gain(sensor, awb_gain);             // automatic white balancing gain 0 = disable , 1 = enable
@@ -325,6 +387,455 @@ void Camera::ApplyCameraCfg() {
 }
 
 /**
+   @brief Set digital zoom (100 = 1.0x, 200 = 2.0x, ...).
+
+          Software zoom: the sensor keeps outputting the full framesize (so the
+          colour/white balance is always the sensor's normal, correct full-frame
+          path), and the centre of each captured JPEG is cropped in the pixel
+          domain by ApplySoftwareZoom(). This avoids the OV5640 ISP-windowing
+          (set_res_raw) colour cast completely - the trade-off is that a zoomed
+          image is a lower-resolution centre crop (1:1 pixels, no upscaling).
+   @param uint16_t - zoom percent (100..400)
+   @return none
+*/
+void Camera::SetZoom(uint16_t i_percent) {
+  uint16_t maxz = GetMaxZoom();
+  if (i_percent < 100) i_percent = 100;
+  if (i_percent > maxz) i_percent = maxz;
+  zoom = i_percent;
+  /* nothing to reconfigure on the sensor - the crop happens per captured frame */
+  SavePtzToNvs();  /* zoom changes are infrequent (slider release); persist */
+}
+
+/**
+   @brief Load the persisted zoom/pan/tilt from NVS (silently keeps defaults if
+          none saved). Zoom is clamped to the current framesize maximum.
+*/
+void Camera::LoadPtzFromNvs() {
+  Preferences p;
+  if (!p.begin(CAM_PTZ_NS, true)) {
+    return;
+  }
+  uint16_t z = p.getUShort("zoom", zoom);
+  uint8_t pn = p.getUChar("pan", panPos);
+  uint8_t tl = p.getUChar("tilt", tiltPos);
+  p.end();
+
+  panPos  = (pn > 100) ? 100 : pn;
+  tiltPos = (tl > 100) ? 100 : tl;
+  if (z < 100) z = 100;
+  uint16_t mx = GetMaxZoom();
+  if (z > mx) z = mx;
+  zoom = z;
+}
+
+/**
+   @brief Persist the current zoom/pan/tilt to NVS. Preferences skips the write
+          when the value is unchanged, so repeated calls do not wear the flash.
+*/
+void Camera::SavePtzToNvs() {
+  Preferences p;
+  if (!p.begin(CAM_PTZ_NS, false)) {
+    return;
+  }
+  p.putUShort("zoom", zoom);
+  p.putUChar("pan", panPos);
+  p.putUChar("tilt", tiltPos);
+  p.end();
+}
+
+uint16_t Camera::GetZoom() {
+  return zoom;
+}
+
+/**
+   @brief Maximum digital zoom allowed for the current framesize.
+
+          Zoom is a centre crop of the captured frame, so at zoom Z the output
+          is (framesize / Z). We cap Z so the crop never falls below
+          ZOOM_MIN_OUTPUT_WIDTH x ZOOM_MIN_OUTPUT_HEIGHT (whichever dimension is
+          the tighter limit wins), and never above ZOOM_MAX_PERCENT. Small
+          framesizes therefore allow little or no zoom; large ones allow more.
+   @return uint16_t - maximum zoom percent (>= 100)
+*/
+uint16_t Camera::GetMaxZoom() {
+  uint16_t w = GetFrameSizeWidth();
+  uint16_t h = GetFrameSizeHeight();
+  if (w == 0 || h == 0) return 100;
+
+  uint32_t zw = (uint32_t)w * 100 / ZOOM_MIN_OUTPUT_WIDTH;
+  uint32_t zh = (uint32_t)h * 100 / ZOOM_MIN_OUTPUT_HEIGHT;
+  uint32_t z = (zw < zh) ? zw : zh;
+
+  if (z < 100) z = 100;
+  if (z > ZOOM_MAX_PERCENT) z = ZOOM_MAX_PERCENT;
+  return (uint16_t)z;
+}
+
+/**
+   @brief Set pan/tilt position of the zoom crop window (0..100, 50 = centred).
+          Takes effect on the next captured frame (no sensor reconfig needed).
+*/
+void Camera::SetPan(uint8_t i_pos) {
+  panPos = (i_pos > 100) ? 100 : i_pos;
+}
+
+void Camera::SetTilt(uint8_t i_pos) {
+  tiltPos = (i_pos > 100) ? 100 : i_pos;
+}
+
+/**
+   @brief Persist the current pan/tilt (and zoom) to NVS. Called on drag-release
+          so a live drag doesn't write flash on every step.
+*/
+void Camera::SavePanTilt() {
+  SavePtzToNvs();
+}
+
+uint8_t Camera::GetPan() {
+  return panPos;
+}
+
+uint8_t Camera::GetTilt() {
+  return tiltPos;
+}
+
+/**
+   @brief Keep the sensor at the full configured framesize. Digital zoom is now
+          done in software (ApplySoftwareZoom), so the sensor window is never
+          changed - this just guarantees the full frame after any reconfig.
+*/
+void Camera::ApplyZoomWindow() {
+  if (sensor == NULL) {
+    return;
+  }
+  sensor->set_framesize(sensor, TFrameSize);
+}
+
+/**
+   @brief Apply the digital zoom to the freshly captured JPEG in FrameBuffer.
+
+          Decodes the JPEG to RGB565, copies out a centered crop of
+          (100/zoom) of the frame, re-encodes that crop to JPEG and writes it
+          back into FrameBuffer (in place, never exceeding the original length,
+          so the driver-owned buffer is never overrun). Colour is untouched
+          because the sensor produced a normal full-frame image.
+
+          For big framesizes the decode is done at a reduced JPEG scale so the
+          intermediate RGB buffer fits in PSRAM; the zoomed output is then a
+          smaller image showing the zoomed field of view.
+*/
+void Camera::ApplySoftwareZoom() {
+  if (zoom <= 100 || FrameBuffer == NULL || FrameBuffer->len < 100) {
+    return;
+  }
+
+  const int w = FrameBuffer->width;
+  const int h = FrameBuffer->height;
+  const size_t origLen = FrameBuffer->len;
+  if (w <= 0 || h <= 0) return;
+
+  /* pick a decode scale so the decoded RGB565 frame fits comfortably in PSRAM */
+  size_t freeps = ESP.getFreePsram();
+  int shift = 0;
+  while (((size_t)(w >> shift) * (h >> shift) * 2) > (freeps / 3) && shift < 3) {
+    shift++;
+  }
+  esp_jpeg_image_scale_t sc = (shift == 0) ? JPG_SCALE_NONE : (shift == 1) ? JPG_SCALE_2X
+                                                          : (shift == 2) ? JPG_SCALE_4X
+                                                                         : JPG_SCALE_8X;
+  const int decW = w >> shift;
+  const int decH = h >> shift;
+  if (decW < 16 || decH < 16) return;
+
+  uint8_t *src = (uint8_t *)heap_caps_malloc((size_t)decW * decH * 2, MALLOC_CAP_SPIRAM);
+  if (src == NULL) {
+    log->AddEvent(LogLevel_Warning, F("Zoom: no PSRAM for decode buffer"));
+    return;
+  }
+
+  if (!jpg2rgb565(FrameBuffer->buf, origLen, src, sc)) {
+    log->AddEvent(LogLevel_Warning, F("Zoom: JPEG decode failed"));
+    free(src);
+    return;
+  }
+
+  /* crop size = decoded size * 100 / zoom */
+  int cropW = (int)((long)decW * 100L / zoom);
+  int cropH = (int)((long)decH * 100L / zoom);
+  cropW &= ~1;  cropH &= ~1;              /* keep even for the JPEG encoder */
+  if (cropW < 16) cropW = 16;
+  if (cropH < 16) cropH = 16;
+
+  /* pan/tilt: position the crop window within the frame. panPos/tiltPos are
+     0..100 in DISPLAY space (what the user drags). The viewer applies the EXIF
+     rotation AFTER this crop, so map the display position back through the
+     rotation to sensor space, otherwise a rotated image pans the wrong way.
+     (imageExifRotation: 1 = 0deg, 3 = 180deg, 6 = 90deg CW, 8 = 270deg CW.)
+     Horizontal mirror / vertical flip need no compensation - they are baked
+     into the frame the crop already operates on. At zoom 1.0x there is no
+     travel so it stays centred regardless. */
+  int sx, sy;
+  switch (imageExifRotation) {
+    case 3:  sx = 100 - panPos;  sy = 100 - tiltPos;  break;  /* 180 deg */
+    case 6:  sx = tiltPos;       sy = 100 - panPos;   break;  /* 90 deg CW */
+    case 8:  sx = 100 - tiltPos; sy = panPos;         break;  /* 270 deg CW */
+    default: sx = panPos;        sy = tiltPos;        break;  /* 0 deg */
+  }
+  const int rangeX = decW - cropW;
+  const int rangeY = decH - cropH;
+  int cropX = (rangeX > 0) ? (rangeX * sx / 100) : 0;
+  int cropY = (rangeY > 0) ? (rangeY * sy / 100) : 0;
+  cropX &= ~1;  cropY &= ~1;              /* keep even (chroma alignment) */
+  if (cropX < 0) cropX = 0;  if (cropX > rangeX) cropX = rangeX;
+  if (cropY < 0) cropY = 0;  if (cropY > rangeY) cropY = rangeY;
+
+  /* Crop the centre and expand RGB565 -> RGB888 in one pass.
+
+     We encode RGB888 (not RGB565) to avoid the library's ambiguous RGB565
+     handling: the RGB565 re-encode path both scrambled the byte order and
+     under-scaled the 5/6-bit channels (correct hue but far too dark). Here we
+     read the decoded RGB565 as native little-endian and expand each channel to
+     full 8-bit with bit replication (so 0x1F -> 0xFF, i.e. white stays white). */
+  uint8_t *dst = (uint8_t *)heap_caps_malloc((size_t)cropW * cropH * 3, MALLOC_CAP_SPIRAM);
+  if (dst == NULL) {
+    log->AddEvent(LogLevel_Warning, F("Zoom: no PSRAM for crop buffer"));
+    free(src);
+    return;
+  }
+
+  for (int y = 0; y < cropH; y++) {
+    const uint8_t *srow = src + (((size_t)(cropY + y) * decW) + cropX) * 2;
+    uint8_t *drow = dst + (size_t)y * cropW * 3;
+    for (int x = 0; x < cropW; x++) {
+      uint16_t p = (uint16_t)srow[0] | ((uint16_t)srow[1] << 8);  /* little-endian */
+      srow += 2;
+      uint8_t r5 = (p >> 11) & 0x1F;
+      uint8_t g6 = (p >> 5) & 0x3F;
+      uint8_t b5 = p & 0x1F;
+      /* esp32-camera stores RGB888 as B,G,R in memory - fmt2jpg reads it that
+         way, so write B,G,R (channels expanded to full 8-bit with replication) */
+      *drow++ = (uint8_t)((b5 << 3) | (b5 >> 2));   /* B: 5 -> 8 bit */
+      *drow++ = (uint8_t)((g6 << 2) | (g6 >> 4));   /* G: 6 -> 8 bit */
+      *drow++ = (uint8_t)((r5 << 3) | (r5 >> 2));   /* R: 5 -> 8 bit */
+    }
+  }
+  free(src);
+
+  /* re-encode; drop quality until it fits inside the original buffer length */
+  uint8_t *jout = NULL;
+  size_t jlen = 0;
+  uint8_t q = 90;
+  bool ok = false;
+  for (int t = 0; t < 4; t++) {
+    if (!fmt2jpg(dst, (size_t)cropW * cropH * 3, cropW, cropH, PIXFORMAT_RGB888, q, &jout, &jlen)) {
+      jout = NULL;
+      break;
+    }
+    if (jlen <= origLen) {
+      ok = true;
+      break;
+    }
+    free(jout);
+    jout = NULL;
+    if (q <= 35) break;
+    q -= 15;
+  }
+
+  free(dst);
+
+  if (ok && jout != NULL) {
+    memcpy(FrameBuffer->buf, jout, jlen);
+    FrameBuffer->len = jlen;
+    FrameBuffer->width = cropW;
+    FrameBuffer->height = cropH;
+    log->AddEventRoutine(LogLevel_Info, "Zoom " + String(zoom) + "% -> " + String(cropW) + "x" + String(cropH));
+  } else {
+    log->AddEvent(LogLevel_Warning, F("Zoom: re-encode did not fit, sent full frame"));
+  }
+  if (jout != NULL) free(jout);
+}
+
+/**
+   @brief Lock exposure (and gain) at the current auto-metered level to stop the
+          OV5640's auto-exposure "hunting" (image swinging bright/dark) on a
+          fixed scene.
+
+          Reads the live exposure the sensor's AEC has settled on (OV5640
+          registers 0x3500..0x3502 = 20-bit, >>4 gives the exposure lines that
+          set_aec_value uses), pins it, and turns OFF auto-exposure and auto-gain
+          so nothing keeps re-metering. White balance is left on auto (it wasn't
+          the cause and freezing it across a reboot would need extra state).
+          Undo it any time with the "Automatic Exposure Control" / "Automatic
+          gain control" switches, which re-enable the auto loops.
+   @return bool - true if the lock was applied
+*/
+bool Camera::LockExposureToCurrent() {
+  sensor = esp_camera_sensor_get();
+  if (sensor == NULL || sensor->get_reg == NULL) {
+    log->AddEvent(LogLevel_Warning, F("Exposure lock not supported by this sensor"));
+    return false;
+  }
+
+  /* read the exposure the auto loop has currently settled on */
+  int r0 = sensor->get_reg(sensor, 0x3500, 0xFF);
+  int r1 = sensor->get_reg(sensor, 0x3501, 0xFF);
+  int r2 = sensor->get_reg(sensor, 0x3502, 0xFF);
+  if (r0 < 0 || r1 < 0 || r2 < 0) {
+    log->AddEvent(LogLevel_Warning, F("Exposure lock: exposure register read failed"));
+    return false;
+  }
+  uint32_t rawExp = ((uint32_t)r0 << 16) | ((uint32_t)r1 << 8) | (uint32_t)r2;
+  int expValue = (int)(rawExp >> 4);          /* -> set_aec_value domain */
+  if (expValue < 1) expValue = 1;
+  if (expValue > 1200) expValue = 1200;       /* clamp to the config/UI range */
+
+  /* read the gain it settled on (0x350A[1:0]:0x350B = 10-bit, real gain = reg/16) */
+  int g0 = sensor->get_reg(sensor, 0x350A, 0xFF);
+  int g1 = sensor->get_reg(sensor, 0x350B, 0xFF);
+  int agcValue = agc_gain;                     /* keep current if the read fails */
+  if (g0 >= 0 && g1 >= 0) {
+    int gainReg = (((g0 & 0x03) << 8) | (g1 & 0xFF));
+    agcValue = (gainReg / 16);                 /* approx real-gain multiplier */
+    if (agcValue < 0) agcValue = 0;
+    if (agcValue > 30) agcValue = 30;
+  }
+
+  /* persist the pinned values and turn the auto loops OFF */
+  aec_value = expValue;      config->SaveAecValue(expValue);
+  exposure_ctrl = false;     config->SaveExposureCtrl(false);
+  agc_gain = agcValue;       config->SaveAgcGain(agcValue);
+  gain_ctrl = false;         config->SaveGainCtrl(false);
+
+  /* re-apply: ApplyCameraCfg sets manual exposure/gain to the saved values */
+  ApplyCameraCfg();
+  log->AddEvent(LogLevel_Info, "Exposure locked (aec=" + String(expValue) + ", agc=" + String(agcValue) + ")");
+  return true;
+}
+
+/**
+   @brief Save the current image-tuning settings as a preset in NVS flash, so a
+          good setup (e.g. after locking exposure and nudging brightness/
+          contrast/saturation) can be restored later with LoadSettingsPreset().
+   @return bool - true on success
+*/
+bool Camera::SaveSettingsPreset() {
+  Preferences p;
+  if (!p.begin(CAM_PRESET_NS, false)) {
+    log->AddEvent(LogLevel_Error, F("Camera preset: NVS open failed"));
+    return false;
+  }
+  p.putChar("bri", brightness);
+  p.putChar("con", contrast);
+  p.putChar("sat", saturation);
+  p.putBool("hm", hmirror);
+  p.putBool("vf", vflip);
+  p.putBool("exp", exposure_ctrl);
+  p.putBool("awb", awb);
+  p.putBool("awbg", awb_gain);
+  p.putUChar("wbm", wb_mode);
+  p.putBool("bpc", bpc);
+  p.putBool("wpc", wpc);
+  p.putBool("gma", raw_gama);
+  p.putBool("aec2", aec2);
+  p.putChar("ael", ae_level);
+  p.putUShort("aecv", aec_value);
+  p.putBool("gc", gain_ctrl);
+  p.putUChar("agc", agc_gain);
+  p.putUShort("zoom", zoom);
+  p.putUChar("pan", panPos);
+  p.putUChar("tilt", tiltPos);
+  p.putBool("saved", true);
+  p.end();
+  log->AddEvent(LogLevel_Info, F("Camera settings preset saved"));
+  return true;
+}
+
+/**
+   @brief Restore the last saved image-tuning preset (see SaveSettingsPreset).
+          The values are applied and also written to the normal EEPROM config so
+          they persist across a reboot.
+   @return bool - true if a preset existed and was applied
+*/
+bool Camera::LoadSettingsPreset() {
+  Preferences p;
+  if (!p.begin(CAM_PRESET_NS, true)) {
+    log->AddEvent(LogLevel_Warning, F("Camera preset: none saved yet"));
+    return false;
+  }
+  if (!p.getBool("saved", false)) {
+    p.end();
+    log->AddEvent(LogLevel_Warning, F("Camera preset: none saved yet"));
+    return false;
+  }
+
+  brightness    = p.getChar("bri", brightness);
+  contrast      = p.getChar("con", contrast);
+  saturation    = p.getChar("sat", saturation);
+  hmirror       = p.getBool("hm", hmirror);
+  vflip         = p.getBool("vf", vflip);
+  exposure_ctrl = p.getBool("exp", exposure_ctrl);
+  awb           = p.getBool("awb", awb);
+  awb_gain      = p.getBool("awbg", awb_gain);
+  wb_mode       = p.getUChar("wbm", wb_mode);
+  bpc           = p.getBool("bpc", bpc);
+  wpc           = p.getBool("wpc", wpc);
+  raw_gama      = p.getBool("gma", raw_gama);
+  aec2          = p.getBool("aec2", aec2);
+  ae_level      = p.getChar("ael", ae_level);
+  aec_value     = p.getUShort("aecv", aec_value);
+  gain_ctrl     = p.getBool("gc", gain_ctrl);
+  agc_gain      = p.getUChar("agc", agc_gain);
+  uint16_t pZoom = p.getUShort("zoom", zoom);   /* older presets default to current */
+  uint8_t  pPan  = p.getUChar("pan", panPos);
+  uint8_t  pTilt = p.getUChar("tilt", tiltPos);
+  p.end();
+
+  /* persist into the normal config so the loaded preset survives a reboot */
+  config->SaveBrightness(brightness);
+  config->SaveContrast(contrast);
+  config->SaveSaturation(saturation);
+  config->SaveHmirror(hmirror);
+  config->SaveVflip(vflip);
+  config->SaveExposureCtrl(exposure_ctrl);
+  config->SaveAwb(awb);
+  config->SaveAwbGain(awb_gain);
+  config->SaveAwbMode(wb_mode);
+  config->SaveBpc(bpc);
+  config->SaveWpc(wpc);
+  config->SaveRawGama(raw_gama);
+  config->SaveAec2(aec2);
+  config->SaveAeLevel(ae_level);
+  config->SaveAecValue(aec_value);
+  config->SaveGainCtrl(gain_ctrl);
+  config->SaveAgcGain(agc_gain);
+
+  /* restore zoom/pan/tilt: set pan/tilt first, then SetZoom clamps to the
+     current framesize and persists all three to NVS */
+  SetPan(pPan);
+  SetTilt(pTilt);
+  SetZoom(pZoom);
+
+  ApplyCameraCfg();
+  log->AddEvent(LogLevel_Info, F("Camera settings preset loaded"));
+  return true;
+}
+
+/**
+   @brief Whether a saved camera-settings preset exists.
+   @return bool
+*/
+bool Camera::HasSettingsPreset() {
+  Preferences p;
+  if (!p.begin(CAM_PRESET_NS, true)) {
+    return false;
+  }
+  bool has = p.getBool("saved", false);
+  p.end();
+  return has;
+}
+
+/**
    @brief Function for reinit camera module
    @param none
    @return none
@@ -337,6 +848,8 @@ void Camera::ReinitCameraModule() {
   delay(100);
   InitCameraModule();
   ApplyCameraCfg();
+  /* Re-init resets the sensor, so the AF firmware must be uploaded again */
+  InitAutofocus();
 }
 
 /**
@@ -376,7 +889,7 @@ void Camera::CapturePhoto() {
 
   /* Check if photo is already sending */
   if (true == PhotoSending) {
-    log->AddEvent(LogLevel_Info, F("Sending photo"));
+    log->AddEventRoutine(LogLevel_Info, F("Sending photo"));
     return;
   }
 
@@ -413,7 +926,7 @@ void Camera::CapturePhoto() {
     const int maxAttempts = 5;
     PhotoExifData.header = NULL;
     do {
-      log->AddEvent(LogLevel_Info, F("Taking photo..."));
+      log->AddEventRoutine(LogLevel_Info, F("Taking photo..."));
 
       FrameBuffer = esp_camera_fb_get();
       if (!FrameBuffer) {
@@ -426,15 +939,19 @@ void Camera::CapturePhoto() {
       char buf[150] = { '\0' };
       uint8_t ControlFlag = (uint8_t)FrameBuffer->buf[15];
       sprintf(buf, "The picture has been saved. Size: %d bytes, Photo resolution: %zu x %zu", FrameBuffer->len, FrameBuffer->width, FrameBuffer->height);
-      log->AddEvent(LogLevel_Info, buf);
+      log->AddEventRoutine(LogLevel_Info, buf);
 
       if (ControlFlag != 0x00) {
         log->AddEvent(LogLevel_Error, "Camera capture failed! flag: " + String(ControlFlag, HEX));
         FrameBuffer->len = 0;
 
       } else {
-        log->AddEvent(LogLevel_Info, F("Photo OK! "), String(ControlFlag, HEX));
+        log->AddEventRoutine(LogLevel_Info, F("Photo OK! "), String(ControlFlag, HEX));
         CameraCaptureFailedCounter = 0;
+
+        /* apply digital zoom (centre crop) before the EXIF header is built,
+           so the header matches the final (possibly cropped) dimensions */
+        ApplySoftwareZoom();
 
         /* generate exif header */
         update_exif_from_cfg(imageExifRotation);
@@ -443,7 +960,7 @@ void Camera::CapturePhoto() {
         CameraCaptureSuccess = true;
         
         if (PhotoExifData.header != NULL) {
-          log->AddEvent(LogLevel_Info, F("Exif header OK! Len: "), String(PhotoExifData.len));
+          log->AddEventRoutine(LogLevel_Info, F("Exif header OK! Len: "), String(PhotoExifData.len));
         } else {
           log->AddEvent(LogLevel_Error, F("Exif header failed! "), String(PhotoExifData.len));
         }
@@ -496,6 +1013,9 @@ void Camera::CaptureStream(camera_fb_t* i_buf) {
 
       /* check if photo is correctly saved */
     } while (!(FrameBuffer->len > 100));
+
+    /* apply digital zoom (centre crop) so the live stream is zoomed too */
+    ApplySoftwareZoom();
 
     /* check if the photo is rotated */
     bool ExifStatus = false;
@@ -816,6 +1336,9 @@ void Camera::SetFrameSize(uint8_t i_data) {
   config->SaveFrameSize(i_data);
   FrameSize = i_data;
   TFrameSize = TransformFrameSizeDataType(i_data);
+  /* the max zoom depends on the framesize - re-clamp so a smaller framesize
+     can't leave the zoom above its new safe maximum */
+  SetZoom(zoom);
   ReinitCameraModule();
 }
 
@@ -1098,6 +1621,15 @@ uint16_t Camera::GetFrameSizeWidth() {
     case 6:
       ret = 1600;
       break;
+    case 7:
+      ret = 1920;
+      break;
+    case 8:
+      ret = 2048;
+      break;
+    case 9:
+      ret = 2592;
+      break;
     default:
       ret = 320;
       break;
@@ -1142,6 +1674,15 @@ uint16_t Camera::GetFrameSizeHeight() {
       break;
     case 6:
       ret = 1200;
+      break;
+    case 7:
+      ret = 1080;
+      break;
+    case 8:
+      ret = 1536;
+      break;
+    case 9:
+      ret = 1944;
       break;
     default:
       ret = 240;

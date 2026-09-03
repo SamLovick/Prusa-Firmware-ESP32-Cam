@@ -205,6 +205,9 @@ void Logs::AddEvent(LogLevel_enum level, String msg, bool newLine, bool date) {
 
     /* print log message to console */
     Serial.print(LogMsg);
+
+    /* capture to boot / error buffers */
+    CaptureBuffers(LogMsg, level);
 #if (true == ENABLE_SD_CARD)
     /* append log message to log file */
     if (true == LogFileOpened) {
@@ -214,7 +217,7 @@ void Logs::AddEvent(LogLevel_enum level, String msg, bool newLine, bool date) {
         LogOpenFile();
         if (true == LogFileOpened) {
           LogFileOpened = AppendFile(&LogFile, &LogMsg);
-        } 
+        }
       }
     }
 #endif
@@ -258,6 +261,9 @@ void Logs::AddEvent(LogLevel_enum level, const __FlashStringHelper *msg, String 
     /* print log message to console */
     Serial.print(LogMsg);
 
+    /* capture to boot / error buffers */
+    CaptureBuffers(LogMsg, level);
+
 #if (true == ENABLE_SD_CARD)
     /* append log message to log file */
     if (true == LogFileOpened) {
@@ -267,7 +273,7 @@ void Logs::AddEvent(LogLevel_enum level, const __FlashStringHelper *msg, String 
         LogOpenFile();
         if (true == LogFileOpened) {
           AppendFile(&LogFile, &LogMsg);
-        } 
+        }
       }
     }
 #endif
@@ -281,6 +287,118 @@ void Logs::AddEvent(LogLevel_enum level, const __FlashStringHelper *msg, String 
   /* release mutex */
   xSemaphoreGive(LogMutex);
  }
+
+/**
+   @info Append a logged message to the in-RAM boot and error buffers.
+         Called from AddEvent while the log mutex is held.
+   @param String - the fully formatted log message
+   @param LogLevel_enum - the message level
+   @return none
+*/
+void Logs::CaptureBuffers(const String &msg, LogLevel_enum level) {
+  /* boot log: keep everything until boot is marked complete */
+  if (false == BootComplete) {
+    if (BootLog.length() < LOG_BOOT_BUFFER_MAX) {
+      BootLog += msg;
+    }
+  }
+
+  /* error log: keep errors and warnings in a size-capped ring buffer */
+  if (level <= LogLevel_Warning) {
+    ErrorLog += msg;
+    if (ErrorLog.length() > LOG_ERROR_BUFFER_MAX) {
+      /* drop the oldest quarter to make room */
+      ErrorLog.remove(0, ErrorLog.length() - (LOG_ERROR_BUFFER_MAX * 3 / 4));
+    }
+  }
+}
+
+/**
+   @info Routine (high-frequency) log event. Only logged when routine logging
+         is enabled, so the periodic photo/upload messages can be silenced.
+   @param LogLevel_enum - log level
+   @param String - log message
+   @param bool - new line
+   @param bool - date
+   @return none
+*/
+void Logs::AddEventRoutine(LogLevel_enum level, String msg, bool newLine, bool date) {
+  if (false == RoutineEnable) {
+    return;
+  }
+  AddEvent(level, msg, newLine, date);
+}
+
+/**
+   @info Routine (high-frequency) log event (flash-string variant).
+   @param LogLevel_enum - log level
+   @param const __FlashStringHelper - log message
+   @param String - parameters
+   @param bool - new line
+   @param bool - date
+   @return none
+*/
+void Logs::AddEventRoutine(LogLevel_enum level, const __FlashStringHelper *msg, String parameters, bool newLine, bool date) {
+  if (false == RoutineEnable) {
+    return;
+  }
+  AddEvent(level, msg, parameters, newLine, date);
+}
+
+/**
+   @info Mark boot complete - stop capturing messages to the boot log.
+   @param none
+   @return none
+*/
+void Logs::MarkBootComplete() {
+  BootComplete = true;
+}
+
+/**
+   @info Get the captured boot log.
+   @param none
+   @return String - boot log
+*/
+String Logs::GetBootLog() {
+  return BootLog;
+}
+
+/**
+   @info Get the captured error/warning log.
+   @param none
+   @return String - error log
+*/
+String Logs::GetErrorLog() {
+  return ErrorLog;
+}
+
+/**
+   @info Clear the error/warning log buffer.
+   @param none
+   @return none
+*/
+void Logs::ClearErrorLog() {
+  ErrorLog = "";
+}
+
+/**
+   @info Enable/disable routine (high-frequency) messages.
+   @param bool - enable
+   @return none
+*/
+void Logs::SetRoutineLogEnable(bool i_data) {
+  RoutineEnable = i_data;
+  AddEvent(LogLevel_Info, F("Routine log messages: "), String((true == i_data) ? "enabled" : "disabled"));
+}
+
+/**
+   @info Get routine messages state.
+   @param none
+   @return bool - state
+*/
+bool Logs::GetRoutineLogEnable() {
+  return RoutineEnable;
+}
 
 /**
    @info Set file name

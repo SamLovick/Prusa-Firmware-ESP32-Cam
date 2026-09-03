@@ -13,16 +13,24 @@
 #define _MCU_CFG_H_
 
 /* ----------------- CAMERA TYPE  ---------------*/
-#define AI_THINKER_ESP32_CAM            true
+#define AI_THINKER_ESP32_CAM            false
 #define ESP32_WROVER_DEV                false
 #define CAMERA_MODEL_ESP32_S3_DEV_CAM   false
 #define CAMERA_MODEL_ESP32_S3_EYE_2_2   false
-#define CAMERA_MODEL_XIAO_ESP32_S3_CAM  false
+#define CAMERA_MODEL_XIAO_ESP32_S3_CAM  true
 #define CAMERA_MODEL_ESP32_S3_CAM       false
 #define ESP32_S3_WROOM_FREENOVE         false
 
+/* ---------------- AUTOFOCUS CFG  --------------*/
+#define ENABLE_OV5640_AUTOFOCUS     true                    ///< enable OV5640 VCM autofocus support (uploads AF firmware to sensor MCU)
+
 /* ---------------- BASIC MCU CFG  --------------*/
-#define SW_VERSION                  "1.1.2"                 ///< SW version
+/* SW_VERSION is the upstream base version obtained from GitHub. Keep it
+   unchanged: it is reported to Prusa Connect and used to identify the base
+   firmware. Track local modifications with FW_VARIANT_VERSION and CHANGELOG.md. */
+#define SW_VERSION                  "1.1.2"                 ///< upstream base SW version (from GitHub)
+#define FW_VARIANT                  "XIAO ESP32-S3 + OV5640" ///< hardware/feature variant name
+#define FW_VARIANT_VERSION          "1.1.2-xiao-ov5640.40"  ///< variant version - bump on every change, see CHANGELOG.md
 #define SW_BUILD                    __DATE__ " " __TIME__   ///< build number
 #define CONSOLE_VERBOSE_DEBUG       false                   ///< enable/disable verbose debug log level for console
 #define DEVICE_HOSTNAME             "Prusa-ESP32cam"        ///< device hostname
@@ -31,8 +39,17 @@
 /* ------------ PRUSA BACKEND CFG  --------------*/
 #define HOST_URL_CAM_PATH           "/c/snapshot"           ///< path for sending photo to prusa connect
 #define HOST_URL_INFO_PATH          "/c/info"               ///< path for sending info to prusa connect
-#define REFRESH_INTERVAL_MIN        10                      ///< minimum refresh interval for sending photo to prusa connect [s]
+#define REFRESH_INTERVAL_MIN        1                       ///< minimum refresh interval for sending photo to prusa connect [s]
 #define REFRESH_INTERVAL_MAX        240                     ///< maximum refresh interval for sending photo to prusa connect [s]
+
+/* -------------- DIGITAL ZOOM CFG --------------*/
+/* Digital zoom is a software centre-crop of the captured frame (the sensor
+   stays at the selected framesize). Zoom is capped per framesize so the cropped
+   output never falls below the minimum size below - otherwise a high zoom on a
+   small framesize would leave only a handful of pixels. */
+#define ZOOM_MAX_PERCENT            400                     ///< absolute maximum digital zoom [%]
+#define ZOOM_MIN_OUTPUT_WIDTH       640                     ///< zoomed crop never narrower than this [px]
+#define ZOOM_MIN_OUTPUT_HEIGHT      480                     ///< zoomed crop never shorter than this [px]
 
 /* -------------- STATUS LED CFG ----------------*/
 #define STATUS_LED_ON_DURATION      100                     ///< time for blink status LED when is module in the ON state [ms]
@@ -61,12 +78,37 @@
 #define WEB_CACHE_INTERVAL          86400                   ///< cache interval for browser [s] 86400s = 24h
 
 /* --------------- OTA UPDATE CFG  --------------*/
+/* This is bespoke firmware, so checking the Prusa GitHub repo for "updates"
+   (and flashing stock firmware over it) is disabled. Local "Update from File"
+   still works. Set to true to restore GitHub version checks / cloud update. */
+#define ENABLE_OTA_CLOUD_UPDATE     false                   ///< enable GitHub OTA version check + cloud update
 #define OTA_UPDATE_API_SERVER       "api.github.com"        ///< OTA update server URL
 #define OTA_UPDATE_API_URL          F("/repos/prusa3d/Prusa-Firmware-ESP32-Cam/releases/latest")  ///< path to file with OTA update
 
 /* ---------- RESET CFG CONFIGURATION  ----------*/
 #define CFG_RESET_TIME_WAIT         10000                   ///< wait to 10 000 ms = 10s for reset cfg during grounded CFG_RESET_PIN 
 #define CFG_RESET_LOOP_DELAY        100                     ///< delay in the loop for reset cfg
+
+/* ------------- LOG ROUTING / BUFFERS ----------*/
+/* "Routine" messages are the high-frequency operational logs (photo capture,
+   upload cycle, telemetry). They can be switched off at runtime so the boot /
+   error messages are easy to read. Default state after boot: */
+#define LOG_ROUTINE_MESSAGES_DEFAULT  false                 ///< true = show routine messages after boot, false = suppress
+#define LOG_BOOT_BUFFER_MAX           6000                  ///< max bytes kept in the in-RAM boot log
+#define LOG_ERROR_BUFFER_MAX          4000                  ///< max bytes kept in the in-RAM error/warning log (ring)
+
+/* --------------- MicroSD INIT -----------------*/
+/* SDMMC clock in kHz. The XIAO ESP32-S3 Sense SD slot is often unreliable at
+   the 20 MHz default; the code first tries SD_INIT_FREQ_KHZ, then retries at
+   the lower SD_INIT_FREQ_FALLBACK_KHZ. Frequencies: 40000=40MHz, 20000=20MHz,
+   400=probing/low. */
+#define SD_INIT_RETRY_COUNT         10                      ///< number of SD mount attempts
+#define SD_INIT_SETTLE_MS           800                     ///< delay before the first mount, lets the card power up
+#define SD_INIT_RETRY_DELAY_MS      350                     ///< delay between mount attempts
+#define SD_INIT_HIGHFREQ_ATTEMPTS   3                       ///< first N attempts use SD_INIT_FREQ_KHZ, rest use fallback
+#define SD_INIT_FREQ_KHZ            10000                   ///< first-attempts SDMMC clock [kHz] (lowered from 20 MHz for write reliability on the XIAO Sense SD-over-FPC wiring)
+#define SD_INIT_FREQ_FALLBACK_KHZ   400                     ///< retry SDMMC clock [kHz] (slow but reliable)
+#define SD_INIT_FORMAT_IF_FAILED    false                   ///< DESTRUCTIVE: format card to FAT32 if mount fails
 
 /* ---------------- MicroSD Logs ----------------*/
 #define LOGS_FILE_NAME              "SysLog.log"            ///< syslog file name
@@ -76,7 +118,7 @@
 
 /* ---------------- AP MODE CFG  ----------------*/
 #define STA_AP_MODE_TIMEOUT         300000                  ///< how long is AP enable after start, when is module in the STA mode [ms]
-#define SERVICE_WIFI_SSID_UID       true                    ///< enable/disable added UID to service SSID name
+#define SERVICE_WIFI_SSID_UID       false                   ///< enable/disable added UID to service SSID name
 #define SERVICE_WIFI_SSID           F("ESP32_camera")       ///< service WI-FI SSID name. Maximum length SERVICE_WIFI_SSID + UID = 32
 #define SERVICE_WIFI_PASS           F("12345678")           ///< service WI-FI password
 #define SERVICE_WIFI_CHANNEL        10                      ///< service WI-FI channel
@@ -89,8 +131,19 @@
 #define IPV4_ADDR_MAX_LENGTH        15                      ///< maximum length for IPv4 address
 
 /* ----------------- WiFi CFG -------------------*/
-#define WIFI_STA_WDG_TIMEOUT        60000                   ///< STA watchdog timeout [ms]
+#define WIFI_STA_WDG_TIMEOUT        30000                   ///< STA watchdog timeout [ms]
 #define WIFI_DISABLE_UNENCRYPTED_STA_PASS_CHECK false       ///< enable/disable WEP/WPA/WPA2/... encryption for STA mode . for the wifi network without encryption set to false
+
+/* --------- FORCED STA CREDENTIALS (no AP boot) ---------
+   When enabled, the module always boots straight into WiFi client (STA)
+   mode and connects to the network below using DHCP - it never starts the
+   configuration Access Point. The credentials are written to EEPROM on the
+   first boot (or whenever they differ), so the STA gating logic that reads
+   EEPROM stays consistent. Set WIFI_FORCE_STA_CREDENTIALS to false to
+   restore the normal AP-based provisioning behaviour. */
+#define WIFI_FORCE_STA_CREDENTIALS  true                    ///< force STA connection to the network below, disable service AP
+#define WIFI_FORCE_STA_SSID         F("YOUR_WIFI_SSID")     ///< <-- SET YOUR WiFi SSID before building
+#define WIFI_FORCE_STA_PASS         F("YOUR_WIFI_PASSWORD") ///< <-- SET YOUR WiFi password before building
 
 /* ----------------- NTP CFG --------------------*/
 #define NTP_SERVER_1                "pool.ntp.org"          ///< NTP server
@@ -100,7 +153,7 @@
 
 /* ------------------ EXIF CFG ------------------*/
 #define CAMERA_MAKE                 "OmniVision"            ///< Camera make string
-#define CAMERA_MODEL                "OV2640"                ///< Camera model string
+#define CAMERA_MODEL                "OV5640"                ///< Camera model string
 #define CAMERA_SOFTWARE             "Prusa ESP32-cam"       ///< Camera software string
 #define CAMERA_EXIF_ROTATION_STREAM false                   ///< enable camera exif rotation for stream
 
@@ -108,6 +161,27 @@
 #define TIMELAPS_PHOTO_FOLDER       "/timelapse"            ///< folder for timelaps photos
 #define TIMELAPS_PHOTO_PREFIX       "photo"                 ///< photo name for timelaps
 #define TIMELAPS_PHOTO_SUFFIX       ".jpg"                  ///< photo file type for timelaps
+
+/* ------------- TIMELAPSE VIDEO CFG ------------*/
+/* On-device MJPEG-AVI timelapse recording, saved to the timelapse folder and
+   downloadable from the web UI ("SD card photos" list). Recording is started/
+   stopped manually; one frame is added per photo trigger, played back at
+   TIMELAPS_VIDEO_FPS (so a slow trigger interval becomes a fast timelapse). */
+#define ENABLE_TIMELAPSE_VIDEO      true                    ///< enable MJPEG-AVI timelapse recording
+#define TIMELAPS_VIDEO_PREFIX       "tl_"                   ///< timelapse video file-name prefix
+#define TIMELAPS_VIDEO_SUFFIX       ".avi"                  ///< timelapse video file type
+#define TIMELAPS_VIDEO_FPS          10                      ///< timelapse video playback frames per second
+
+/* --------------- PRUSALINK CFG ----------------*/
+/* Poll the printer's local PrusaLink API (v1) for print state, to auto
+   start/stop the timelapse video. Works on Prusa Core One / Buddy-firmware
+   printers. Get the API key on the printer: Settings -> Network -> PrusaLink.
+   The camera and printer must be on the same network. */
+#define ENABLE_PRUSALINK            true                    ///< enable PrusaLink print-state polling
+#define PRUSALINK_DEFAULT_IP        F("192.168.1.100")      ///< default printer LAN IP (set yours here or edit in the web UI)
+#define PRUSALINK_POLL_INTERVAL_S   10                      ///< poll interval [s]
+#define PRUSALINK_HTTP_TIMEOUT_MS   4000                    ///< HTTP request timeout [ms]
+#define PRUSALINK_AUTO_TIMELAPSE    true                    ///< default state of auto start/stop timelapse on print
 
 /* ---------------- FACTORY CFG  ----------------*/
 #define FACTORY_CFG_PHOTO_REFRESH_INTERVAL    30                ///< in the second
@@ -138,7 +212,7 @@
 #define FACTORY_CFG_GAIN_CTRL                 1                 ///< enable automatic gain
 #define FACTORY_CFG_AGC_GAIN                  0                 ///< automatic gain controll gain
 #define FACTORY_CFG_HOSTNAME                  F("connect.prusa3d.com")  ///< hostname for Prusa Connect
-#define FACTORY_CFG_ENABLE_SERVICE_AP         1                 ///< enable service AP mode
+#define FACTORY_CFG_ENABLE_SERVICE_AP         0                 ///< enable service AP mode (0 = boot straight to STA/DHCP, see WIFI_FORCE_STA_CREDENTIALS)
 #define FACTORY_CFG_NETWORK_IP_METHOD         0                 ///< 0 - DHCP, 1 - Static IP
 #define FACTORY_CFG_NETWORK_STATIC_IP         F("255.255.255.255") ///< Static IP address
 #define FACTORY_CFG_NETWORK_STATIC_MASK       F("255.255.255.255") ///< Static Mask
@@ -292,6 +366,12 @@
 #define EEPROM_ADDR_EXT_SENS_UNIT_START           (EEPROM_ADDR_EXT_SENS_ENABLE_START + EEPROM_ADDR_EXT_SENS_ENABLE_LENGTH)
 #define EEPROM_ADDR_EXT_SENS_UNIT_LENGTH          1
 
+#define EEPROM_ADDR_PRUSALINK_IP_START            (EEPROM_ADDR_EXT_SENS_UNIT_START + EEPROM_ADDR_EXT_SENS_UNIT_LENGTH)
+#define EEPROM_ADDR_PRUSALINK_IP_LENGTH           16    ///< IPv4 string (max 15) + 1 length byte
+
+#define EEPROM_ADDR_PRUSALINK_KEY_START           (EEPROM_ADDR_PRUSALINK_IP_START + EEPROM_ADDR_PRUSALINK_IP_LENGTH)
+#define EEPROM_ADDR_PRUSALINK_KEY_LENGTH          49    ///< API key (max 48) + 1 length byte
+
 #define EEPROM_SIZE (EEPROM_ADDR_REFRESH_INTERVAL_LENGTH + EEPROM_ADDR_FINGERPRINT_LENGTH + EEPROM_ADDR_TOKEN_LENGTH + \
                      EEPROM_ADDR_FRAMESIZE_LENGTH + EEPROM_ADDR_BRIGHTNESS_LENGTH + EEPROM_ADDR_CONTRAST_LENGTH + \
                      EEPROM_ADDR_SATURATION_LENGTH + EEPROM_ADDR_HMIRROR_LENGTH + EEPROM_ADDR_VFLIP_LENGTH + \
@@ -307,7 +387,8 @@
                      EEPROM_ADDR_HOSTNAME_LENGTH + EEPROM_ADDR_SERVICE_AP_ENABLE_LENGTH + EEPROM_ADDR_NETWORK_IP_METHOD_LENGTH +\
                      EEPROM_ADDR_NETWORK_STATIC_IP_LENGTH + EEPROM_ADDR_NETWORK_STATIC_MASK_LENGTH + EEPROM_ADDR_NETWORK_STATIC_GATEWAY_LENGTH + \
                      EEPROM_ADDR_NETWORK_STATIC_DNS_LENGTH + EEPROM_ADDR_IMAGE_ROTATION_LENGTH + EEPROM_ADDR_TIMELAPS_ENABLE_LENGTH + \
-                     EEPROM_ADDR_EXT_SENS_ENABLE_LENGTH + EEPROM_ADDR_EXT_SENS_UNIT_LENGTH)    ///< how many bits do we need for eeprom memory
+                     EEPROM_ADDR_EXT_SENS_ENABLE_LENGTH + EEPROM_ADDR_EXT_SENS_UNIT_LENGTH + \
+                     EEPROM_ADDR_PRUSALINK_IP_LENGTH + EEPROM_ADDR_PRUSALINK_KEY_LENGTH)    ///< how many bits do we need for eeprom memory
 
 #endif
 

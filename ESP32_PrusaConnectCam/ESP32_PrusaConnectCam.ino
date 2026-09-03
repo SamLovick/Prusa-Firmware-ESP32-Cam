@@ -54,6 +54,11 @@ void setup() {
   Serial.println(F("Prusa ESP32-cam https://prusa3d.cz"));
   Serial.print(F("SW Version: "));
   Serial.println(SW_VERSION);
+  Serial.print(F("Variant: "));
+  Serial.print(FW_VARIANT);
+  Serial.print(F(" ("));
+  Serial.print(FW_VARIANT_VERSION);
+  Serial.println(F(")"));
   Serial.print(F("Build: "));
   Serial.println(SW_BUILD);
 #if (CONSOLE_VERBOSE_DEBUG == true)
@@ -113,28 +118,31 @@ void setup() {
 
   /* init tasks */
   SystemLog.AddEvent(LogLevel_Info, F("Start tasks"));
-  xTaskCreatePinnedToCore(System_TaskMain, "SystemNtpOtaUpdate", 5200, NULL, 1, &Task_SystemMain, 0);                           /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskMain, "SystemNtpOtaUpdate", 6144, NULL, 1, &Task_SystemMain, 0);                           /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_SystemMain));
-  xTaskCreatePinnedToCore(System_TaskCaptureAndSendPhoto, "CaptureAndSendPhoto", 4400, NULL, 2, &Task_CapturePhotoAndSend, 0);  /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskCaptureAndSendPhoto, "CaptureAndSendPhoto", 6144, NULL, 2, &Task_CapturePhotoAndSend, 0);  /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_CapturePhotoAndSend));
-  xTaskCreatePinnedToCore(System_TaskWifiManagement, "WiFiManagement", 2700, NULL, 3, &Task_WiFiManagement, 0);                 /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskWifiManagement, "WiFiManagement", 4096, NULL, 3, &Task_WiFiManagement, 0);                 /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_WiFiManagement));
-#if (true == ENABLE_SD_CARD)  
-  xTaskCreatePinnedToCore(System_TaskSdCardCheck, "CheckMicroSdCard", 3000, NULL, 4, &Task_SdCardCheck, 0);                     /*function, description, stack size, parameters, priority, task handle, core*/
+#if (true == ENABLE_SD_CARD)
+  xTaskCreatePinnedToCore(System_TaskSdCardCheck, "CheckMicroSdCard", 5120, NULL, 4, &Task_SdCardCheck, 0);                     /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_SdCardCheck));
 #endif
-  xTaskCreatePinnedToCore(System_TaskSerialCfg, "CheckSerialConfiguration", 2300, NULL, 5, &Task_SerialCfg, 0);                 /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskSerialCfg, "CheckSerialConfiguration", 4096, NULL, 5, &Task_SerialCfg, 0);                 /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_SerialCfg));
-  xTaskCreatePinnedToCore(System_TaskSystemTelemetry, "PrintSystemTelemetry", 2200, NULL, 6, &Task_SystemTelemetry, 0);         /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskSystemTelemetry, "PrintSystemTelemetry", 4096, NULL, 6, &Task_SystemTelemetry, 0);         /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_SystemTelemetry));
-  xTaskCreatePinnedToCore(System_TaskSysLed, "SystemLed", 2000, NULL, 7, &Task_SysLed, 0);                                      /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskSysLed, "SystemLed", 3072, NULL, 7, &Task_SysLed, 0);                                      /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_SysLed));
-  xTaskCreatePinnedToCore(System_TaskWiFiWatchdog, "WiFiWatchdog", 2200, NULL, 8, &Task_WiFiWatchdog, 0);                       /*function, description, stack size, parameters, priority, task handle, core*/
+  xTaskCreatePinnedToCore(System_TaskWiFiWatchdog, "WiFiWatchdog", 4096, NULL, 8, &Task_WiFiWatchdog, 0);                       /*function, description, stack size, parameters, priority, task handle, core*/
   ESP_ERROR_CHECK(esp_task_wdt_add(Task_WiFiWatchdog));
   //xTaskCreatePinnedToCore(System_TaskSdCardRemove, "SdCardRemove", 3000, NULL, 9, &Task_SdCardFileRemove, 0);                   /*function, description, stack size, parameters, priority, task handle, core*/
   //esp_task_wdt_add(Task_SdCardFileRemove);
 
   SystemLog.AddEvent(LogLevel_Info, F("MCU configuration done"));
+
+  /* boot finished - stop capturing the boot log buffer */
+  SystemLog.MarkBootComplete();
 }
 
 void loop() {

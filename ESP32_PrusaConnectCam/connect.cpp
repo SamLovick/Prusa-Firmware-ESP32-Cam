@@ -10,6 +10,7 @@
 */
 
 #include "connect.h"
+#include "avi.h"
 
 PrusaConnect Connect(&SystemConfig, &SystemLog, &SystemCamera, &SystemWifiMngt);
 
@@ -80,7 +81,7 @@ bool PrusaConnect::SendDataToBackend(String *i_data, int i_data_length, String i
   WiFiClientSecure client;
   BackendReceivedStatus = "";
   bool ret = false;
-  log->AddEvent(LogLevel_Info, "Sending " + i_type + " to PrusaConnect, " + String(i_data_length) + " bytes");
+  log->AddEventRoutine(LogLevel_Info, "Sending " + i_type + " to PrusaConnect, " + String(i_data_length) + " bytes");
 
   /* check fingerprint and token length */
   if ((Fingerprint.length() > 0) && (Token.length() > 0)) {
@@ -175,7 +176,7 @@ bool PrusaConnect::SendDataToBackend(String *i_data, int i_data_length, String i
       }
 
       client.flush();
-      log->AddEvent(LogLevel_Info, "Send done: " + String(i_data_length) + "/" + String(sendet_data) + " bytes");
+      log->AddEventRoutine(LogLevel_Info, "Send done: " + String(i_data_length) + "/" + String(sendet_data) + " bytes");
 
       /* check if all data was sent */
       if (i_data_length != sendet_data) {
@@ -226,7 +227,7 @@ bool PrusaConnect::SendDataToBackend(String *i_data, int i_data_length, String i
     }
   }
 
-  log->AddEvent(LogLevel_Info, "Upload done. Response code: " + BackendReceivedStatus + " ,BA:" + CovertBackendAvailabilitStatusToString(BackendAvailability));
+  log->AddEventRoutine(LogLevel_Info, "Upload done. Response code: " + BackendReceivedStatus + " ,BA:" + CovertBackendAvailabilitStatusToString(BackendAvailability));
   return ret;
 }
 
@@ -237,7 +238,7 @@ bool PrusaConnect::SendDataToBackend(String *i_data, int i_data_length, String i
  * @return none
  */
 void PrusaConnect::SendPhotoToBackend() {
-  log->AddEvent(LogLevel_Info, F("Start sending photo to prusaconnect"));
+  log->AddEventRoutine(LogLevel_Info, F("Start sending photo to prusaconnect"));
   camera->SetPhotoSending(true);
   String Photo = "";
   size_t total_len = 0;
@@ -262,7 +263,7 @@ void PrusaConnect::SendInfoToBackend() {
     return;
 
   } else {
-    log->AddEvent(LogLevel_Info, F("Start sending device information to prusaconnect"));
+    log->AddEventRoutine(LogLevel_Info, F("Start sending device information to prusaconnect"));
 
     JsonDocument json_data;
     String json_string = "";
@@ -283,7 +284,7 @@ void PrusaConnect::SendInfoToBackend() {
     network_info["wifi_ssid"] = SystemWifiMngt.GetStaSsid();
 
     serializeJson(json_data, json_string);
-    log->AddEvent(LogLevel_Info, "Data: " + json_string);
+    log->AddEventRoutine(LogLevel_Info, "Data: " + json_string);
     bool response = SendDataToBackend(&json_string, json_string.length(), F("application/json"), F("Info"), HOST_URL_INFO_PATH, SendInfo);
 
     if (true == response) {
@@ -310,6 +311,13 @@ void PrusaConnect::TakePictureAndSendToBackend() {
     /* save photo to SD card */
     if (false == camera->GetStreamStatus()) {
       SavePhotoToSdCard();
+
+#if (defined(ENABLE_TIMELAPSE_VIDEO) && (true == ENABLE_TIMELAPSE_VIDEO))
+      /* append this frame to the timelapse video if recording */
+      if (true == TimelapseAvi.IsRecording()) {
+        TimelapseAvi.AddFrame(camera->GetPhotoFb()->buf, camera->GetPhotoFb()->len);
+      }
+#endif
     }
 
   } else {
@@ -488,7 +496,7 @@ void PrusaConnect::SavePhotoToSdCard() {
 #if (ENABLE_SD_CARD == true)
   /* check if time laps photo save is enabled */
   if (EnableTimelapsPhotoSave == true) {
-    log->AddEvent(LogLevel_Info, F("Save TimeLaps photo to SD card"));
+    log->AddEventRoutine(LogLevel_Info, F("Save TimeLaps photo to SD card"));
     
     /* check if SD card is detected */
     if (log->GetCardDetectedStatus() == false) {
@@ -498,7 +506,7 @@ void PrusaConnect::SavePhotoToSdCard() {
 
     /* check if folder for time laps photos exists */
     if (false == log->CheckDir(SD_MMC, TIMELAPS_PHOTO_FOLDER)) {
-      log->AddEvent(LogLevel_Info, F("Create folder for TimeLaps photos"));
+      log->AddEventRoutine(LogLevel_Info, F("Create folder for TimeLaps photos"));
       log->CreateDir(SD_MMC, TIMELAPS_PHOTO_FOLDER);
     }
 
@@ -511,14 +519,14 @@ void PrusaConnect::SavePhotoToSdCard() {
     /* save photo to SD card */
     if (camera->GetPhotoExifData()->header != NULL) {
       if (log->WritePicture(FileName, camera->GetPhotoFb()->buf + camera->GetPhotoExifData()->offset, camera->GetPhotoFb()->len - camera->GetPhotoExifData()->offset, camera->GetPhotoExifData()->header, camera->GetPhotoExifData()->len) == true) {
-        log->AddEvent(LogLevel_Info, F("Photo saved to SD card. EXIF"));
+        log->AddEventRoutine(LogLevel_Info, F("Photo saved to SD card. EXIF"));
       } else {
         log->AddEvent(LogLevel_Error, F("Error saving photo to SD card. EXIF"));
       }
 
     } else {
       if (log->WritePicture(FileName, camera->GetPhotoFb()->buf, camera->GetPhotoFb()->len) == true) {
-        log->AddEvent(LogLevel_Info, F("Photo saved to SD card"));
+        log->AddEventRoutine(LogLevel_Info, F("Photo saved to SD card"));
       } else {
         log->AddEvent(LogLevel_Error, F("Error saving photo to SD card"));
       }

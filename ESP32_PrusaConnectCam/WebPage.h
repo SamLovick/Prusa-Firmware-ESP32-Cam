@@ -42,6 +42,12 @@ const char index_html[] PROGMEM = R"rawliteral(
 				var defaultLink = document.querySelector('a[href="page_config.html"]');
 				setActive(defaultLink);
 			});
+			afStatus();
+			tlStatus();
+			plStatus();
+			plConfig();
+			zoomInit();
+			ptInit();
 		});
 	</script>
 </head>
@@ -71,7 +77,26 @@ const char index_html[] PROGMEM = R"rawliteral(
 				<button class="btn" onclick="actionButton('/action_capture',true,'')">Refresh Snapshot</button> <br><br>
 				<button class="btn" onclick="actionButton('/action_send',false,'Sending snapshot...')">Send snapshot</button><br><br><br>
 				<button class="btn" onclick="window.open('saved-photo.jpg')">Download snapshot</button><br><br>
+					<button class="btn" onclick="window.open('/sd_files')">SD card files</button><br><br>
+					<p class="p1">Printer (PrusaLink): <b><span id="pl_status">-</span></b></p>
+					<p class="p1">IP <input type="text" id="pl_ip" size="14"> Key <input type="password" id="pl_key" size="10" placeholder="(saved)"> <button class="btn_save" onclick="plSave()">Save</button></p>
+					<label class="switch"><input type="checkbox" id=pl_autoid onchange="plAuto(this.checked)"><span class="checkbox_slider round"></span></label> <span class="p1">Auto timelapse on print</span><br><br>
+					<p class="p1">Timelapse video: <b><span id="tl_status">-</span></b></p><br>
+					<button class="btn" onclick="tlVideo('start')">Start TL video</button>
+					<button class="btn" onclick="tlVideo('stop')">Stop TL video</button><br><br>
 				<button class="btn" onclick="window.open('stream.mjpg')">Start stream</button><br><br>
+					<p class="p1">Autofocus (OV5640): <b><span id="af_status">-</span></b></p><br>
+					<button class="btn" onclick="afButton('/af_single')">Autofocus</button> <br><br>
+					<button class="btn" onclick="afButton('/af_continuous')">Continuous AF</button> <br><br>
+					<button class="btn" onclick="afButton('/af_pause')">Pause AF</button>
+					<button class="btn" onclick="afButton('/af_release')">Relax lens (defocus)</button><br>
+					<p class="p1" style="font-size:0.8em">Test: press <b>Relax lens</b> (image blurs), then <b>Autofocus</b> (snaps back sharp).</p><br>
+					<p class="p1">Digital zoom: <b><span id="zoom_val">1.0x</span></b> <span style="font-size:0.8em">(centre crop; max zoom depends on the selected resolution)</span></p>
+					<input type="range" min="100" max="400" step="10" value="100" id="zoomid" style="width:70%" onchange="setZoom(this.value)"><br>
+					<p class="p1" style="font-size:0.85em;margin-bottom:12px">Pan / Tilt <span style="font-size:0.9em">(drag the green box; only when zoomed in)</span></p>
+					<div id="pt_frame" style="position:relative;width:200px;height:150px;border:1px solid #888;background:#e9e9e9;touch-action:none;margin-top:6px;margin-bottom:10px">
+						<div id="pt_crop" style="position:absolute;left:0;top:0;width:200px;height:150px;border:2px solid #0a7;background:rgba(0,170,119,0.18);cursor:move;box-sizing:border-box"></div>
+					</div><br>
 			</article>
 		</div>
 	</section>
@@ -235,13 +260,16 @@ const char page_config_html[] PROGMEM = R"rawliteral(
 					<option value="4">1024x768</option>
 					<option value="5">1280x1024</option>
 					<option value="6">1600x1200</option>
+					<option value="7">1920x1080 (OV5640)</option>
+					<option value="8">2048x1536 (OV5640)</option>
+					<option value="9">2592x1944 (OV5640)</option>
 				</select> <span class="pc1">pixels</span>
 			</td>
 		</tr>
 		<tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
-		<tr><td class="pc1">Brightness</td><td class="pc2">Low <input type="range" class="slider" name="brightness" id=brightnessid min="-2" max="2" step="1" onchange="changeValue(this.value, 'set_int?brightness=', 'config')">High</td></tr>
-		<tr><td class="pc1">Contrast</td><td class="pc2">Low <input type="range" class="slider" name="contrast" id=contrastid min="-2" max="2" step="1" onchange="changeValue(this.value, 'set_int?contrast=', 'config')"> High</td></tr>
-		<tr><td class="pc1">Saturation</td><td class="pc2">Low <input type="range" class="slider" name="saturation" id=saturationid min="-2" max="2" step="1" onchange="changeValue(this.value, 'set_int?saturation=', 'config')"> High</td></tr>
+		<tr><td class="pc1">Brightness</td><td class="pc2">Low <input type="range" class="slider" name="brightness" id=brightnessid min="-64" max="64" step="2" onchange="changeValue(this.value, 'set_int?brightness=', 'config')">High</td></tr>
+		<tr><td class="pc1">Contrast</td><td class="pc2">Low <input type="range" class="slider" name="contrast" id=contrastid min="-24" max="24" step="1" onchange="changeValue(this.value, 'set_int?contrast=', 'config')"> High</td></tr>
+		<tr><td class="pc1">Saturation</td><td class="pc2">Low <input type="range" class="slider" name="saturation" id=saturationid min="-64" max="64" step="2" onchange="changeValue(this.value, 'set_int?saturation=', 'config')"> High</td></tr>
 		<tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 		<tr>
 			<td class="pc1">Image Rotation</td><td><label for="image_rotation"></label>
@@ -290,6 +318,10 @@ const char page_config_html[] PROGMEM = R"rawliteral(
 			<tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 			<tr><td class="pc1">Automatic gain control</td><td class="pc2"><label class="switch"><input type="checkbox" name="gain_ctrl" id=gain_ctrlid onchange="changeValue(this.checked, 'set_bool?gain_ctrl=', 'config')"><span class="checkbox_slider round"></span></label> <span id="status_gain_ctrl"></span></td></tr>
 			<tr><td class="pc1">Automatic gain control level</td><td class="pc2">Low <input type="range" class="slider" name="agc_gain" id=agc_gainid min="0" max="30" step="1" onchange="changeValue(this.value, 'set_int?agc_gain=', 'config')">High</td></tr>
+			<tr><td class="pc1">Stabilise exposure</td><td class="pc2"><button class="btn" onclick="lockExposure()">Lock exposure to current</button> <span id="lock_exposure_status"></span></td></tr>
+			<tr><td></td><td class="pc1" style="font-size:0.8em">Freezes exposure &amp; gain at the current auto level to stop the image swinging bright/dark on a fixed scene. Turn the two "Automatic..." switches above back on to resume auto.</td></tr>
+			<tr><td class="pc1">Saved settings</td><td class="pc2"><button class="btn" onclick="camSave()">Save current</button> <button class="btn" onclick="camLoad()">Load last saved</button> <span id="cam_preset_status"></span></td></tr>
+			<tr><td></td><td class="pc1" style="font-size:0.8em">Save banks the current brightness/contrast/saturation/exposure/gain/white-balance so you can tune freely and restore this baseline with Load last saved.</td></tr>
 			<tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 			<tr><td class="pc1">Bad pixel correction</td><td class="pc2"><label class="switch"><input type="checkbox" name="bpc" id=bpcid onchange="changeValue(this.checked, 'set_bool?bpc=', 'config')"><span class="checkbox_slider round"></span></label> <span id="status_bpc"></span></td></tr>
 			<tr><td class="pc1">White pixel correction</td><td class="pc2"><label class="switch"><input type="checkbox" name="wpc" id=wpcid onchange="changeValue(this.checked, 'set_bool?wpc=', 'config')"><span class="checkbox_slider round"></span></label> <span id="status_wpc"></span></td></tr>
@@ -322,6 +354,7 @@ const char page_system_html[] PROGMEM = R"rawliteral(
 			<tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 			<tr><td class="ps3">Firmware</td><td></td></tr>
             <tr><td class="ps1">Version</td><td class="ps2" id="sw_ver"></td></tr>
+			<tr><td class="ps1">Variant</td><td class="ps2" id="sw_variant"></td></tr>
 			<tr><td class="ps1">Build</td><td class="ps2" id="sw_build"></td></tr>
             <tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 			<tr><td class="ps3">Configuration</td><td></td></tr>
@@ -337,24 +370,28 @@ const char page_system_html[] PROGMEM = R"rawliteral(
 			   </td>
 		   </tr>
 		   <tr><td class="pc1">Get logs</td><td ><button class="btn_update" onclick="window.open('get_logs')">Get logs</button></td></tr>
+		   <tr><td class="pc1">Boot log</td><td ><button class="btn_update" onclick="window.open('get_bootlog')">Boot log</button></td></tr>
+		   <tr><td class="pc1">Error log</td><td ><button class="btn_update" onclick="window.open('get_errorlog')">Error log</button></td></tr>
+		   <tr><td class="pc1">Routine log messages</td><td class="pc2"><label class="switch"><input type="checkbox" name="routine_log" id=routine_logid onchange="changeValue(this.checked ? 'on' : 'off', 'routine_log?', 'system')"><span class="checkbox_slider round"></span></label> <span id="status_routine_log"></span></td></tr>
 		   <tr><td style="height: 1px;"></td><td style="height: 1px;"></td></tr>
 		   <tr><td class="ps3">Micro SD card</td><td></td></tr>
 		   <tr><td class="ps1">Card status</td><td class="ps2" id="sd_status"></td></tr>
 		   <tr><td class="ps1">Capacity</td><td class="ps2"><span id="sd_total"></span> MB</td></tr>
 		   <tr><td class="ps1">Available</td><td class="ps2"><div class="progress-container"><div class="progress-bar" id="progress_bar_sd_free">0%</div></div></td></tr>
 		   <tr><td class="ps1">Used</td><td class="ps2"><div class="progress-container"><div class="progress-bar" id="progress_bar_sd_used">0%</div></div></td></tr>
+		   <tr><td class="ps1">Recover card</td><td class="ps2"><button class="btn" onclick="sdFormat()">Recover / Reformat SD</button> <span id="sd_format_status"></span></td></tr>
+		   <tr><td></td><td class="ps1" style="font-size:0.8em">Use only if the card is unreadable/corrupt. Reformats it to FAT32 (erases all files) so it works again - no Windows needed. A card that already works is left untouched.</td></tr>
         </table>
     </center>
     <br>
     <center>
         <table id="update">
-            <tr><td class="ps3">Firmware update</td><td></td></tr>
-			<tr><td class="ps1">Available from cloud</td><td class="ps2"><span id="sw_new_ver"></span> &nbsp;<button class="btn_update" onclick="checkUpdate()">Check for Updates</button></td></tr>
+            <tr><td class="ps3">Firmware update (local file)</td><td></td></tr>
             <tr><td class="ps1">Status</td><td><span class="ps2" id="status">Ready</span></td></tr>
 			<tr><td class="ps1">Progress</td><td class="ps2"><div class="progress-container"><div class="progress-bar" id="myProgressBar">0%</div></div></td></tr>
-            <tr><td></td><td><input type="file" id="firmwareInput" accept=".bin"></td></tr>
-            <tr><td></td><td><input type="submit" class="btn_update" value="Update from File" onclick="uploadFile()"></td></tr>
-			<tr><td></td><td><input type="submit" class="btn_update" value="Update from Cloud" onclick="updateWeb()"></td></tr>
+            <tr><td class="ps1">Firmware .bin</td><td><input type="file" id="firmwareInput" accept=".bin" onchange="fwFileChanged()"></td></tr>
+            <tr><td></td><td><input type="submit" class="btn_update" id="fwUpdateBtn" value="Update from File" onclick="uploadFile()" disabled></td></tr>
+            <tr><td></td><td class="ps1" style="font-size:0.8em">Pick the compiled <b>ESP32_PrusaConnectCam.ino.bin</b> from the Arduino build folder (Sketch &rarr; Export Compiled Binary).</td></tr>
         </table>
     </center>
 </body>
@@ -1006,7 +1043,10 @@ function get_data(val) {
 			if (val == "system") {
 				$("#uptime").text(obj.uptime);
 				$("#sw_ver").text(obj.sw_ver);
+				$("#sw_variant").text(obj.sw_variant);
 				$("#sw_build").text(obj.sw_build);
+				document.getElementById('routine_logid').checked = (obj.routine_log == "true");
+				$("#status_routine_log").text((obj.routine_log == "true") ? "On" : "Off");
 				$("#last_upload_status").text(obj.last_upload_status);
 				$("#wifi_mode").text(obj.wifi_mode);
 				$("#sw_new_ver").text(obj.sw_new_ver);
@@ -1117,6 +1157,265 @@ function actionButton(url, reload, msg) {
 
     xhr.open('GET', url, true);
     xhr.send();
+}
+
+function afButton(url) {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var el = document.getElementById('af_status');
+			if (el) { el.innerText = xhr.responseText; }
+			/* poll the AF status a few times so the focusing -> focused transition is visible */
+			var n = 0;
+			var t = setInterval(function() {
+				afStatus();
+				if (++n >= 8) { clearInterval(t); }
+			}, 400);
+		}
+	};
+	xhr.open('GET', url, true);
+	xhr.send();
+}
+
+function afStatus() {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var el = document.getElementById('af_status');
+			if (el) { el.innerText = xhr.responseText; }
+		}
+	};
+	xhr.open('GET', '/af_status', true);
+	xhr.send();
+}
+
+function zoomApply(txt) {
+	var p = txt.split(',');
+	var v = parseInt(p[0]) || 100;
+	var mx = parseInt(p[1]) || 400;
+	var s = document.getElementById('zoomid');
+	if (s) {
+		s.max = mx;
+		if (v > mx) { v = mx; }
+		s.value = v;
+	}
+	var l = document.getElementById('zoom_val');
+	if (l) { l.innerText = (v / 100).toFixed(1) + 'x (max ' + (mx / 100).toFixed(1) + 'x)'; }
+	ptZoom = v;
+	ptUpdateSize();
+}
+
+var ptZoom = 100, ptPan = 50, ptTilt = 50, ptTimer = null, ptDragInit = false;
+
+function ptUpdateSize() {
+	var f = document.getElementById('pt_frame'), c = document.getElementById('pt_crop');
+	if (!f || !c) { return; }
+	var fw = f.clientWidth || 200, fh = f.clientHeight || 150;
+	c.style.width = (fw * 100 / ptZoom) + 'px';
+	c.style.height = (fh * 100 / ptZoom) + 'px';
+	c.style.cursor = (ptZoom > 100) ? 'move' : 'default';
+	c.style.opacity = (ptZoom > 100) ? '1' : '0.4';
+	ptPlace();
+}
+
+function ptPlace() {
+	var f = document.getElementById('pt_frame'), c = document.getElementById('pt_crop');
+	if (!f || !c) { return; }
+	var fw = f.clientWidth || 200, fh = f.clientHeight || 150, cw = c.clientWidth, ch = c.clientHeight;
+	c.style.left = ((fw - cw) * ptPan / 100) + 'px';
+	c.style.top = ((fh - ch) * ptTilt / 100) + 'px';
+}
+
+function ptSend() {
+	if (ptTimer) { return; }
+	ptTimer = setTimeout(function() {
+		ptTimer = null;
+		var x = new XMLHttpRequest();
+		x.open('GET', '/pantilt?pan=' + ptPan + '&tilt=' + ptTilt, true);
+		x.send();
+	}, 150);
+}
+
+function ptCommit() {
+	var x = new XMLHttpRequest();
+	x.open('GET', '/pantilt?pan=' + ptPan + '&tilt=' + ptTilt + '&save=1', true);
+	x.send();
+}
+
+function ptInit() {
+	var f = document.getElementById('pt_frame'), c = document.getElementById('pt_crop');
+	if (!f || !c) { return; }
+	ptUpdateSize();
+	/* load the persisted pan/tilt so the box reflects the saved position */
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var q = xhr.responseText.split(',');
+			var pp = parseInt(q[0]), tt = parseInt(q[1]);
+			if (!isNaN(pp)) { ptPan = pp; }
+			if (!isNaN(tt)) { ptTilt = tt; }
+			ptPlace();
+		}
+	};
+	xhr.open('GET', '/pantilt', true);
+	xhr.send();
+	if (ptDragInit) { return; }
+	ptDragInit = true;
+	var drag = false, sx, sy, ox, oy;
+	function pos(e) { var t = (e.touches && e.touches[0]) ? e.touches[0] : e; return { x: t.clientX, y: t.clientY }; }
+	function down(e) { if (ptZoom <= 100) { return; } drag = true; var p = pos(e); sx = p.x; sy = p.y; ox = c.offsetLeft; oy = c.offsetTop; e.preventDefault(); }
+	function move(e) {
+		if (!drag) { return; }
+		var p = pos(e), fw = f.clientWidth, fh = f.clientHeight, cw = c.clientWidth, ch = c.clientHeight;
+		var nx = ox + (p.x - sx), ny = oy + (p.y - sy);
+		nx = Math.max(0, Math.min(fw - cw, nx)); ny = Math.max(0, Math.min(fh - ch, ny));
+		c.style.left = nx + 'px'; c.style.top = ny + 'px';
+		ptPan = (fw - cw > 0) ? Math.round(nx * 100 / (fw - cw)) : 50;
+		ptTilt = (fh - ch > 0) ? Math.round(ny * 100 / (fh - ch)) : 50;
+		ptSend(); e.preventDefault();
+	}
+	function up() { if (!drag) { return; } drag = false; ptCommit(); }
+	c.addEventListener('mousedown', down);
+	document.addEventListener('mousemove', move);
+	document.addEventListener('mouseup', up);
+	c.addEventListener('touchstart', down, { passive: false });
+	document.addEventListener('touchmove', move, { passive: false });
+	document.addEventListener('touchend', up);
+}
+
+function setZoom(v) {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) { zoomApply(xhr.responseText); }
+	};
+	xhr.open('GET', '/zoom?level=' + v, true);
+	xhr.send();
+}
+
+function zoomInit() {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) { zoomApply(xhr.responseText); }
+	};
+	xhr.open('GET', '/zoom', true);
+	xhr.send();
+}
+
+function lockExposure() {
+	var s = document.getElementById('lock_exposure_status');
+	if (s) { s.innerText = ' working...'; }
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4) {
+			if (s) { s.innerText = ' ' + xhr.responseText; }
+		}
+	};
+	xhr.open('GET', '/lock_exposure', true);
+	xhr.send();
+}
+
+function camSave() {
+	var s = document.getElementById('cam_preset_status');
+	if (s) { s.innerText = ' saving...'; }
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4) { if (s) { s.innerText = ' ' + xhr.responseText; } }
+	};
+	xhr.open('GET', '/cam_save', true);
+	xhr.send();
+}
+
+function camLoad() {
+	var s = document.getElementById('cam_preset_status');
+	if (s) { s.innerText = ' loading...'; }
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4) {
+			if (s) { s.innerText = ' ' + xhr.responseText; }
+			if (xhr.status == 200) { setTimeout(function(){ location.reload(); }, 600); }
+		}
+	};
+	xhr.open('GET', '/cam_load', true);
+	xhr.send();
+}
+
+function tlStatus() {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var el = document.getElementById('tl_status');
+			if (el) { el.innerText = xhr.responseText; }
+		}
+	};
+	xhr.open('GET', '/tl_video?status', true);
+	xhr.send();
+}
+
+function plStatus() {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var el = document.getElementById('pl_status');
+			if (el) { el.innerText = xhr.responseText; }
+			var cb = document.getElementById('pl_autoid');
+			if (cb) { cb.checked = (xhr.responseText.indexOf('[auto-TL ON]') >= 0); }
+		}
+	};
+	xhr.open('GET', '/prusalink_status', true);
+	xhr.send();
+	setTimeout(plStatus, 10000);
+}
+
+function plAuto(on) {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) { plStatus(); }
+	};
+	xhr.open('GET', '/pl_auto?' + (on ? 'on' : 'off'), true);
+	xhr.send();
+}
+
+function plConfig() {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			var p = xhr.responseText.split(';');
+			var ipf = document.getElementById('pl_ip');
+			if (ipf) { ipf.value = p[0]; }
+			var kf = document.getElementById('pl_key');
+			if (kf) { kf.placeholder = (p[1] == '1') ? '(saved)' : '(not set)'; }
+		}
+	};
+	xhr.open('GET', '/pl_config', true);
+	xhr.send();
+}
+
+function plSave() {
+	var ip = document.getElementById('pl_ip').value;
+	var key = document.getElementById('pl_key').value;
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			alert(xhr.responseText);
+			document.getElementById('pl_key').value = '';
+			plConfig();
+			plStatus();
+		}
+	};
+	xhr.open('GET', '/pl_config?ip=' + encodeURIComponent(ip) + '&key=' + encodeURIComponent(key), true);
+	xhr.send();
+}
+
+function tlVideo(action) {
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4 && xhr.status == 200) {
+			alert(xhr.responseText);
+			tlStatus();
+		}
+	};
+	xhr.open('GET', '/tl_video?' + action, true);
+	xhr.send();
 }
 
 function setActive(link) {
@@ -1252,11 +1551,34 @@ if (typeof FileSize === 'undefined') {
 	var FileSize = 0;
 }
 
+function sdFormat() {
+	if (!confirm("Reformat the SD card to FAT32?\n\nThis ERASES ALL FILES on the card. Use it only to recover a corrupt/unreadable card.")) { return; }
+	var s = document.getElementById('sd_format_status');
+	if (s) { s.innerText = ' working...'; }
+	var xhr = new XMLHttpRequest();
+	xhr.onreadystatechange = function() {
+		if (xhr.readyState == 4) {
+			if (s) { s.innerText = ' ' + xhr.responseText; }
+		}
+	};
+	xhr.open('POST', '/sd_format', true);
+	xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+	xhr.send('confirm=yes');
+}
+
+function fwFileChanged() {
+	var inp = document.getElementById('firmwareInput');
+	var btn = document.getElementById('fwUpdateBtn');
+	var ok = inp && inp.files && inp.files.length > 0 && /\.bin$/i.test(inp.files[0].name);
+	if (btn) { btn.disabled = !ok; }
+}
+
 function uploadFile() {
-	alert("Started updating...");
 	const firmwareInput = document.getElementById('firmwareInput');
-	const statusDiv = document.getElementById('status');
 	const file = firmwareInput.files[0];
+	if (!file || !/\.bin$/i.test(file.name)) { alert('Select a valid .bin firmware file first.'); return; }
+	alert("Started updating...");
+	const statusDiv = document.getElementById('status');
 	FileSize = file.size;
 	SetFirmwareSize(file.size);
 

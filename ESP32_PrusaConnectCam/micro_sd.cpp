@@ -10,6 +10,7 @@
 */
 
 #include "micro_sd.h"
+#include "log.h"  // SystemLog (for boot-log-visible SD diagnostics)
 
 /**
    @brief Constructor
@@ -19,6 +20,7 @@
 MicroSd::MicroSd() {
   CardDetected = false;
   DetectAfterBoot = false;
+  CardMountFailed = false;
   sdCardMutex = xSemaphoreCreateMutex();
 }
 
@@ -34,6 +36,62 @@ void MicroSd::ReinitCard() {
   delay(50);
   Serial.println(F("Init micro SD card"));
   InitSdCard();
+}
+
+/**
+   @brief Reformat the SD card to FAT32 (recovery for a corrupt card).
+
+          Mounts with format_if_mount_failed = true: if the card is unreadable
+          (corrupt FAT) it is reformatted so it works again; if the card already
+          mounts cleanly it is left untouched (this call can't wipe a good card).
+          Intended to be triggered manually from the web UI so the user never has
+          to pull the card and reformat it in Windows.
+   @return bool - true if the card is mounted (recovered or already OK) afterwards
+*/
+bool MicroSd::FormatCard() {
+  xSemaphoreTake(sdCardMutex, portMAX_DELAY);
+  bool ok = false;
+
+  SystemLog.AddEvent(LogLevel_Warning, F("SD: manual Recover/Reformat requested"));
+
+  /* close any file we might be holding open, then fully tear down the bus */
+  if (file) {
+    file.close();
+  }
+  SD_MMC.end();
+  delay(100);
+  SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_DATA0);
+
+  /* slow, reliable clock for the format/mount */
+  if (SD_MMC.begin("/sdcard", true, true, SD_INIT_FREQ_FALLBACK_KHZ)) {
+    if (SD_MMC.cardType() != CARD_NONE) {
+      ok = true;
+      CardDetected = true;
+      DetectAfterBoot = true;
+      CardMountFailed = false;
+      CheckCardUsedStatus();
+      SystemLog.AddEvent(LogLevel_Info, F("SD: card is mounted after Recover/Reformat"));
+    } else {
+      CardDetected = false;
+      SystemLog.AddEvent(LogLevel_Error, F("SD: Recover/Reformat - no card responding on the bus"));
+    }
+  } else {
+    CardDetected = false;
+    CardMountFailed = true;
+    SystemLog.AddEvent(LogLevel_Error, F("SD: Recover/Reformat failed - card not responding"));
+  }
+
+  xSemaphoreGive(sdCardMutex);
+  return ok;
+}
+
+/**
+   @brief Whether a card was present on the bus but its filesystem failed to
+          mount (i.e. it looks corrupt and can be recovered by reformatting).
+   @return bool
+*/
+bool MicroSd::GetCardMountFailed() {
+  return CardMountFailed;
 }
 
 /**
@@ -112,17 +170,59 @@ void MicroSd::InitSdCard() {
   /* Start INIT Micro SD card */
   Serial.println(F("Start init micro-SD Card"));
 
-  /* set SD card to 1-line/1-bit mode. GPIO 4 is used for LED and for microSD card. But communication is slower. */
+  /* set SD card to 1-line/1-bit mode (XIAO ESP32-S3 Sense: CLK=7, CMD=9, D0=8) */
   /* https://github.com/espressif/arduino-esp32/blob/master/libraries/SD_MMC/src/SD_MMC.h */
 
   SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_DATA0);
 
-  if (!SD_MMC.begin("/sdcard", true)) {
-    Serial.println(F("SD Card Mount Failed"));
+  CardDetected = false;
+  bool mounted = false;
+
+  /* Log the SD pin map once so it is visible in the boot log */
+  SystemLog.AddEvent(LogLevel_Info, "SD pins (1-bit) CLK/CMD/D0: " + String(SD_PIN_CLK) + "/" + String(SD_PIN_CMD) + "/" + String(SD_PIN_DATA0));
+
+  /* Let the card power up before the first access. In the fast early-boot path
+     the card is not yet ready; an isolated test that waits ~3 s mounts fine at
+     every clock, so give it time and retry over a several-second window. */
+  delay(SD_INIT_SETTLE_MS);
+
+  for (int attempt = 1; (attempt <= SD_INIT_RETRY_COUNT) && (false == mounted); attempt++) {
+    int freq_khz = (attempt <= SD_INIT_HIGHFREQ_ATTEMPTS) ? SD_INIT_FREQ_KHZ : SD_INIT_FREQ_FALLBACK_KHZ;
+    SystemLog.AddEvent(LogLevel_Info, "SD mount attempt " + String(attempt) + "/" + String(SD_INIT_RETRY_COUNT) + " at " + String(freq_khz) + " kHz (1-bit)");
+
+    /* fully tear down and re-assert pins before every attempt (matches the
+       known-good isolated test sequence) */
+    SD_MMC.end();
+    delay(50);
+    SD_MMC.setPins(SD_PIN_CLK, SD_PIN_CMD, SD_PIN_DATA0);
+
+    if (SD_MMC.begin("/sdcard", true, SD_INIT_FORMAT_IF_FAILED, freq_khz)) {
+      mounted = true;
+      SystemLog.AddEvent(LogLevel_Info, "SD mounted at " + String(freq_khz) + " kHz");
+    } else {
+      /* cardType() after a failed mount: CARD_NONE(0) => card not responding on
+         the bus (pins/clock/hardware); otherwise the FAT mount failed */
+      SystemLog.AddEvent(LogLevel_Warning, "SD mount failed, cardType=" + String((int)SD_MMC.cardType()));
+      delay(SD_INIT_RETRY_DELAY_MS);
+    }
+  }
+
+  if (false == mounted) {
+    /* distinguish "card present but filesystem corrupt" from "no card / not
+       responding": cardType() != CARD_NONE means the card answered on the bus
+       but the FAT could not be mounted -> corruption the user can recover from
+       with the web "Recover / Reformat SD" button (no Windows needed). */
+    if (SD_MMC.cardType() != CARD_NONE) {
+      CardMountFailed = true;
+      SystemLog.AddEvent(LogLevel_Error, F("SD card present but filesystem could NOT be mounted - likely corrupt. Use 'Recover / Reformat SD' on the System page to fix it."));
+    } else {
+      SystemLog.AddEvent(LogLevel_Error, F("SD Card Mount Failed after all attempts (no card / not responding on the bus)"));
+    }
     CardDetected = false;
     CardSizeMB = 0;
     return;
   }
+  CardMountFailed = false;
 
   /* check microSD card and card type */
   uint8_t cardType = SD_MMC.cardType();
@@ -607,35 +707,21 @@ void MicroSd::CheckCardUsedStatus() {
 bool MicroSd::isCardCorrupted() {
   bool ret = true;
   if (true == CardDetected) {
-#if (true == CONSOLE_VERBOSE_DEBUG)   
-    //Serial.println(F("Checking card..."));
-#endif
-
-    /* check card size */
-    uint64_t use = SD_MMC.usedBytes();
-    uint64_t size = 0;
-    if (use != 0) {
-      size = SD_MMC.cardSize();
-    }
-
-#if (true == CONSOLE_VERBOSE_DEBUG)   
-    Serial.printf("Card size: %llu, Used: %llu\n", size, use);
-#endif
-
-    /* check space on the card */
-    if (size == use) {
-      Serial.println(F("No space left on device!"));
-      CardDetected = false;
-      ret = false;
-    }
-
-    /* check another error */
-    if ((size <= 0 ) || (size == 0) || (use <= 0) || (use == 0)) {
+    /* Lightweight presence check ONLY. This runs on every SD log append, so it
+       must not do any expensive I/O. The previous version called
+       SD_MMC.usedBytes() (and cardSize()) here, which walks the whole FAT -
+       seconds on a large / near-full card, and worse at the lower SD clock -
+       and was stalling the async web server whenever verbose logging (which
+       writes every web request to the SD log) was enabled.
+       cardType() just returns the cached type from the mounted card, no bus
+       scan. Free space is tracked separately by CheckCardUsedStatus(), and a
+       full card / write error is caught by the file.getWriteError() check in
+       AppendFile(). */
+    if (SD_MMC.cardType() == CARD_NONE) {
       Serial.println(F("No card detected!"));
       CardDetected = false;
       ret = false;
     }
-
   } else {
     ret = false;
   }

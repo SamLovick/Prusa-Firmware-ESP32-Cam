@@ -42,9 +42,30 @@ WiFiMngt::WiFiMngt(Configuration *i_conf, Logs *i_log, Camera *i_cam) {
 void WiFiMngt::LoadCfgFromEeprom() {
   WifiSsid = config->LoadWifiSsid();
   WifiPassword = config->LoadWifiPassowrd();
-  
+
   mDNS_record = config->LoadMdnsRecord();
   EnableServiceAp = config->LoadEnableServiceAp();
+
+#if (defined(WIFI_FORCE_STA_CREDENTIALS) && (true == WIFI_FORCE_STA_CREDENTIALS))
+  /* Force STA client mode: connect to a fixed network via DHCP, never start
+     the service AP. Provision the credentials to EEPROM if they differ, so the
+     STA gating logic (which reads EEPROM flags) stays consistent. */
+  {
+    String forcedSsid = WIFI_FORCE_STA_SSID;
+    String forcedPass = WIFI_FORCE_STA_PASS;
+    if ((WifiSsid != forcedSsid) || (WifiPassword != forcedPass)
+        || (true == EnableServiceAp) || (false == config->CheckActifeWifiCfgFlag())) {
+      log->AddEvent(LogLevel_Warning, F("Provisioning forced STA credentials: "), forcedSsid);
+      config->SaveWifiSsid(forcedSsid);
+      config->SaveWifiPassword(forcedPass);
+      config->SaveWifiCfgFlag(CFG_WIFI_SETTINGS_SAVED);
+      config->SaveEnableServiceAp(false);
+    }
+    WifiSsid = forcedSsid;
+    WifiPassword = forcedPass;
+    EnableServiceAp = false;
+  }
+#endif
 
   NetIpMethod = config->LoadNetworkIpMethod();
   NetStaticIp.fromString(config->LoadNetworkIp());
@@ -188,7 +209,7 @@ void WiFiMngt::WiFiReconnect() {
   } else if (WiFi.status() == WL_CONNECTED) {
     char cstr[150];
     sprintf(cstr, "Wifi connected. SSID: %s, BSSID: %s, RSSI: %d dBm, IP: %s, TX power: %s", WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(), WiFi.RSSI(), WiFi.localIP().toString().c_str(), TranslateTxPower(WiFi.getTxPower()).c_str());  //print 3 digits
-    log->AddEvent(LogLevel_Info, "WiFi status: " + String(cstr));
+    log->AddEventRoutine(LogLevel_Info, "WiFi status: " + String(cstr));
   }
 
   if (Connect.GetBackendAvailabilitStatus() == BackendUnavailable) {

@@ -177,6 +177,8 @@ void Configuration::DefaultCfg() {
   SaveTimeLapseFunctionStatus(FACTORY_CFG_TIMELAPS_ENABLE);
   SaveExternalTemperatureSensorEnable(FACTORY_CFG_ENABLE_EXT_SENSOR);
   SaveExternalTemperatureSensorUnit(FACTORY_CFG_EXT_SENSOR_UNIT);
+  SavePrusaLinkIp(PRUSALINK_DEFAULT_IP);
+  SavePrusaLinkApiKey("");
   Log->AddEvent(LogLevel_Warning, F("+++++++++++++++++++++++++++"));
 }
 
@@ -870,8 +872,28 @@ void Configuration::SaveExternalTemperatureSensorEnable(bool i_data) {
    @return none
 */
 void Configuration::SaveExternalTemperatureSensorUnit(uint8_t i_data) {
-  Log->AddEvent(LogLevel_Verbose, F("Save external temperature sensor unit: "), String(i_data)); 
+  Log->AddEvent(LogLevel_Verbose, F("Save external temperature sensor unit: "), String(i_data));
   SaveUint8(EEPROM_ADDR_EXT_SENS_UNIT_START, i_data);
+}
+
+/**
+   @info Save PrusaLink printer IP
+   @param String - IP
+   @return none
+*/
+void Configuration::SavePrusaLinkIp(String i_data) {
+  Log->AddEvent(LogLevel_Verbose, F("Save PrusaLink IP: "), i_data);
+  SaveString(EEPROM_ADDR_PRUSALINK_IP_START, EEPROM_ADDR_PRUSALINK_IP_LENGTH, i_data);
+}
+
+/**
+   @info Save PrusaLink API key
+   @param String - key
+   @return none
+*/
+void Configuration::SavePrusaLinkApiKey(String i_data) {
+  Log->AddEvent(LogLevel_Verbose, F("Save PrusaLink API key ["), String(i_data.length()) + "]");
+  SaveString(EEPROM_ADDR_PRUSALINK_KEY_START, EEPROM_ADDR_PRUSALINK_KEY_LENGTH, i_data);
 }
 
 /**
@@ -1416,6 +1438,31 @@ uint8_t Configuration::LoadExternalTemperatureSensorUnit() {
 
   return ret;
 
+}
+
+/**
+   @info Load PrusaLink printer IP (defaults to PRUSALINK_DEFAULT_IP if unset)
+   @param none
+   @return String - IP
+*/
+String Configuration::LoadPrusaLinkIp() {
+  Log->AddEvent(LogLevel_Info, F("PrusaLink IP: "), false);
+  String ret = LoadString(EEPROM_ADDR_PRUSALINK_IP_START, EEPROM_ADDR_PRUSALINK_IP_LENGTH, true);
+  if (ret.length() == 0) {
+    ret = PRUSALINK_DEFAULT_IP;
+  }
+  return ret;
+}
+
+/**
+   @info Load PrusaLink API key (empty if unset)
+   @param none
+   @return String - key
+*/
+String Configuration::LoadPrusaLinkApiKey() {
+  Log->AddEvent(LogLevel_Info, F("PrusaLink API key: "), false);
+  String ret = LoadString(EEPROM_ADDR_PRUSALINK_KEY_START, EEPROM_ADDR_PRUSALINK_KEY_LENGTH, CONSOLE_VERBOSE_DEBUG);
+  return ret;
 }
 
 /* EOF */

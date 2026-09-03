@@ -35,6 +35,7 @@ class MicroSd {
 private:
   bool CardDetected;              ///< Card detected status
   bool DetectAfterBoot;           ///< Card detect after boot
+  bool CardMountFailed;           ///< set when a mount attempt failed (likely corrupt FAT); cleared on success
   uint32_t CardSizeMB;            ///< Card size
   uint32_t CardTotalMB;           ///< Card total size
   uint32_t CardUsedMB;            ///< Card used size
@@ -50,6 +51,8 @@ public:
 
   void InitSdCard();
   void ReinitCard();
+  bool FormatCard();
+  bool GetCardMountFailed();
   bool OpenFile(File*, String);
   void CloseFile(File*);
   bool CheckOpenFile(File*);

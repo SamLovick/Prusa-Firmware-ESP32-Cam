@@ -94,8 +94,13 @@
 #define CFG_RESET_LED_LEVEL_ON      LOW     ///< GPIO pin level for status LED ON
 
 /* -------------- STATUS LED CFG ----------------*/
-#define STATUS_LED_ENABLE           true    ///< enable/disable status LED
-#define STATUS_LED_GPIO_NUM         21      ///< GPIO pin for status LED
+/* WARNING: on the XIAO ESP32-S3 Sense, GPIO21 (the on-board user LED) is also
+   the microSD card chip-select (DAT3). Driving it as a status LED holds the SD
+   CS line and the card fails to initialize (cardType=0). The status LED is
+   therefore DISABLED so the SD card works. Set STATUS_LED_ENABLE true only if
+   you do not need the SD card. */
+#define STATUS_LED_ENABLE           false   ///< disabled: GPIO21 is shared with SD card CS
+#define STATUS_LED_GPIO_NUM         21      ///< GPIO pin for status LED (shared with SD CS/DAT3!)
 #define STATUS_LED_OFF_PIN_LEVEL    LOW    ///< GPIO pin level for status LED ON
 
 /* -------------- DHT SENSOR CFG ----------------*/

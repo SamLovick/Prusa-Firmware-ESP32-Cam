@@ -276,6 +276,344 @@ void Server_InitWebServer_WebPages() {
     }
   });
 
+  /* route to get the captured boot log */
+  server.on("/get_bootlog", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: Get get_bootlog"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    request->send(200, "text/plain", SystemLog.GetBootLog());
+  });
+
+  /* route to get the captured error/warning log */
+  server.on("/get_errorlog", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: Get get_errorlog"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    request->send(200, "text/plain", SystemLog.GetErrorLog());
+  });
+
+  /* route to list photo files on the SD card (timelapse folder) with links */
+  server.on("/sd_files", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /sd_files"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("Micro SD card not found"));
+      return;
+    }
+
+    /* Static page SHELL only - no SD access here, so it ALWAYS renders (buttons
+       visible even if the card is huge or the scan misbehaves). The file list is
+       fetched separately from /sd_list (capped) and filled in by JS. */
+    request->send(200, F("text/html"), F(
+      "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>SD files</title><style>body{font-family:sans-serif;margin:1em}"
+      "a{color:#0a7;text-decoration:none}td,th{padding:3px 12px;text-align:left}"
+      "tr:nth-child(even){background:#f3f3f3}"
+      ".btn{padding:6px 14px;margin:4px 6px 4px 0;cursor:pointer}"
+      "#msg{margin-left:8px;color:#0a7}</style></head><body>"
+      "<h3>Files on SD card (/timelapse)</h3>"
+      "<p><a href='/'>&larr; Back</a></p>"
+      "<p><button class='btn' onclick='downloadSel()'>Download selected</button>"
+      "<button class='btn' onclick='deleteSel()'>Delete selected</button>"
+      "<button class='btn' onclick='deleteAll()'>Delete ALL</button>"
+      "<span id='msg'></span></p>"
+      "<table><thead><tr><th><input type='checkbox' id='all' onclick='toggleAll(this.checked)'></th>"
+      "<th>File</th><th>Size</th></tr></thead><tbody id='rows'></tbody></table>"
+      "<p id='cnt'>Loading file list...</p>"
+      "<script>"
+      "var FOLDER='/timelapse';"
+      "function sel(){return Array.prototype.slice.call(document.querySelectorAll('.ck')).filter(function(c){return c.checked}).map(function(c){return c.value})}"
+      "function toggleAll(v){document.querySelectorAll('.ck').forEach(function(c){c.checked=v})}"
+      "function load(){var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState==4){"
+      "var rows=document.getElementById('rows'),cnt=document.getElementById('cnt');"
+      "if(x.status!=200){cnt.innerText='SD card not available';return;}"
+      "var t=x.responseText, lines=t.length?t.split('\\n'):[], html='', n=0, trunc=false;"
+      "for(var i=0;i<lines.length;i++){if(!lines[i])continue;"
+      "if(lines[i]=='TRUNC'){trunc=true;continue;}"
+      "var p=lines[i].split('\\t'),nm=p[0],sz=p[1]||'';"
+      "html+=\"<tr><td><input type='checkbox' class='ck' value='\"+nm+\"'></td><td><a href='/sd_get?path=\"+FOLDER+'/'+encodeURIComponent(nm)+\"'>\"+nm+\"</a></td><td align='right'>\"+sz+\" B</td></tr>\";n++;}"
+      "rows.innerHTML=html;cnt.innerText=n+' file(s)'+(trunc?' (first '+n+' shown; use Delete ALL to clear the backlog)':'');}};"
+      "x.open('GET','/sd_list',true);x.send();}"
+      "function downloadSel(){var f=sel();if(!f.length){alert('No files selected');return}"
+      "var i=0;(function next(){if(i>=f.length)return;var a=document.createElement('a');"
+      "a.href='/sd_get?path='+FOLDER+'/'+encodeURIComponent(f[i]);a.download=f[i];"
+      "document.body.appendChild(a);a.click();document.body.removeChild(a);i++;setTimeout(next,800)})()}"
+      "function deleteSel(){var f=sel();if(!f.length){alert('No files selected');return}"
+      "if(!confirm('Delete '+f.length+' file(s)? This cannot be undone.'))return;"
+      "var m=document.getElementById('msg');m.innerText=' deleting...';"
+      "var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState==4){"
+      "m.innerText=' '+x.responseText;setTimeout(function(){location.reload()},700)}};"
+      "x.open('POST','/sd_delete',true);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+      "x.send('confirm=yes&files='+encodeURIComponent(f.join(',')))}"
+      "function deleteAll(){if(!confirm('Delete ALL files in /timelapse? This cannot be undone.'))return;"
+      "var m=document.getElementById('msg');m.innerText=' deleting all...';"
+      "function round(){var x=new XMLHttpRequest();x.onreadystatechange=function(){if(x.readyState==4){"
+      "m.innerText=' '+x.responseText;"
+      "if(x.responseText.indexOf('more remain')>=0){round();}else{setTimeout(function(){location.reload()},700);}}};"
+      "x.open('POST','/sd_delete_all',true);x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');"
+      "x.send('confirm=yes');}round();}"
+      "load();"
+      "</script></body></html>"));
+  });
+
+  /* data endpoint for the SD files page: capped, plain-text "name<TAB>size" per
+     line (a final "TRUNC" line if the cap was hit). Kept small and separate so
+     the page shell above always renders. */
+  server.on("/sd_list", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /sd_list"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("no card"));
+      return;
+    }
+
+    const uint16_t SD_LIST_MAX = 500;
+    String out;
+    out.reserve(20000);
+    uint16_t count = 0;
+    bool truncated = false;
+    File root = SD_MMC.open(TIMELAPS_PHOTO_FOLDER);
+    if (root && root.isDirectory()) {
+      File f = root.openNextFile();
+      while (f) {
+        if (!f.isDirectory()) {
+          String base = String(f.name());
+          int slash = base.lastIndexOf('/');
+          if (slash >= 0) base = base.substring(slash + 1);
+          out += base;  out += '\t';  out += String(f.size());  out += '\n';
+          count++;
+          if (count >= SD_LIST_MAX) { truncated = true; break; }
+        }
+        f = root.openNextFile();
+      }
+    }
+    if (truncated) { out += F("TRUNC\n"); }
+    request->send(200, F("text/plain"), out);
+  });
+
+  /* route to delete ALL files in the timelapse folder (POST + confirm). Deletes
+     in bounded batches so a huge backlog doesn't block the server too long; the
+     client calls it repeatedly until nothing remains. */
+  server.on("/sd_delete_all", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Warning, F("WEB server: /sd_delete_all"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("Micro SD card not found"));
+      return;
+    }
+    if (!request->hasParam("confirm", true) || request->getParam("confirm", true)->value() != "yes") {
+      request->send(400, F("text/plain"), F("Missing confirmation"));
+      return;
+    }
+
+    String folder = TIMELAPS_PHOTO_FOLDER;
+    const uint16_t BATCH = 200;   /* delete at most this many per request */
+    uint16_t deleted = 0;
+    bool more = false;
+    File root = SD_MMC.open(folder.c_str());
+    if (root && root.isDirectory()) {
+      File f = root.openNextFile();
+      while (f) {
+        if (!f.isDirectory()) {
+          String base = String(f.name());
+          int slash = base.lastIndexOf('/');
+          if (slash >= 0) base = base.substring(slash + 1);
+          String full = folder + "/" + base;
+          f.close();                       /* close before removing */
+          if (SD_MMC.remove(full.c_str())) { deleted++; }
+          if (deleted >= BATCH) { more = true; break; }
+        }
+        f = root.openNextFile();
+      }
+    }
+    request->send(200, F("text/plain"),
+                  "Deleted " + String(deleted) + (more ? F(" (more remain)") : F(" - done")));
+  });
+
+  /* route to delete selected files from the timelapse folder (POST + confirm) */
+  server.on("/sd_delete", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Warning, F("WEB server: /sd_delete"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("Micro SD card not found"));
+      return;
+    }
+    if (!request->hasParam("confirm", true) || request->getParam("confirm", true)->value() != "yes"
+        || !request->hasParam("files", true)) {
+      request->send(400, F("text/plain"), F("Missing confirmation or files"));
+      return;
+    }
+
+    String folder = String(TIMELAPS_PHOTO_FOLDER) + "/";
+    String list = request->getParam("files", true)->value();  /* comma-separated basenames */
+    uint16_t deleted = 0, failed = 0;
+    int start = 0;
+    while (start < (int)list.length()) {
+      int comma = list.indexOf(',', start);
+      String name = (comma < 0) ? list.substring(start) : list.substring(start, comma);
+      start = (comma < 0) ? list.length() : comma + 1;
+      name.trim();
+      /* security: basename only - reject anything with a path separator or traversal */
+      if (name.length() == 0 || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0 || name.indexOf("..") >= 0) {
+        continue;
+      }
+      String full = folder + name;
+      if (SD_MMC.exists(full.c_str()) && SD_MMC.remove(full.c_str())) {
+        deleted++;
+      } else {
+        failed++;
+      }
+    }
+    request->send(200, F("text/plain"), "Deleted " + String(deleted) + " file(s)"
+                  + (failed ? (", " + String(failed) + " failed") : String("")));
+  });
+
+  /* route to download a file from the SD card (restricted to the timelapse folder) */
+  server.on("/sd_get", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /sd_get"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("Micro SD card not found"));
+      return;
+    }
+    if (false == request->hasParam("path")) {
+      request->send(400, F("text/plain"), F("Missing path"));
+      return;
+    }
+    String path = request->getParam("path")->value();
+
+    /* security: only files inside the timelapse folder, no path traversal */
+    String folder = String(TIMELAPS_PHOTO_FOLDER) + "/";
+    if ((false == path.startsWith(folder)) || (path.indexOf("..") >= 0)) {
+      request->send(403, F("text/plain"), F("Forbidden path"));
+      return;
+    }
+    if (false == SD_MMC.exists(path.c_str())) {
+      request->send(404, F("text/plain"), F("File not found"));
+      return;
+    }
+
+    String ct = F("application/octet-stream");
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) ct = F("image/jpeg");
+    else if (path.endsWith(".avi")) ct = F("video/x-msvideo");
+
+    request->send(SD_MMC, path, ct, true);  /* true = download as attachment */
+  });
+
+#if (defined(ENABLE_TIMELAPSE_VIDEO) && (true == ENABLE_TIMELAPSE_VIDEO))
+  /* route to start/stop/query the timelapse MJPEG-AVI recording */
+  server.on("/tl_video", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /tl_video"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (request->hasArg("status")) {
+      String s = TimelapseAvi.IsRecording()
+                   ? ("recording (" + String(TimelapseAvi.GetFrameCount()) + " frames)")
+                   : String("idle");
+      request->send(200, F("text/plain"), s);
+      return;
+    }
+
+    if (false == SystemLog.GetCardDetectedStatus()) {
+      request->send(404, F("text/plain"), F("Micro SD card not found"));
+      return;
+    }
+
+    if (request->hasArg("start")) {
+      if (true == TimelapseAvi.IsRecording()) {
+        request->send(200, F("text/plain"), "Already recording: " + TimelapseAvi.GetPath());
+        return;
+      }
+      if (false == SystemLog.CheckDir(SD_MMC, TIMELAPS_PHOTO_FOLDER)) {
+        SystemLog.CreateDir(SD_MMC, TIMELAPS_PHOTO_FOLDER);
+      }
+      String fn = String(TIMELAPS_PHOTO_FOLDER) + "/" + TIMELAPS_VIDEO_PREFIX + SystemLog.GetSystemTime() + TIMELAPS_VIDEO_SUFFIX;
+      bool ok = TimelapseAvi.Begin(fn, SystemCamera.GetFrameSizeWidth(), SystemCamera.GetFrameSizeHeight(), TIMELAPS_VIDEO_FPS);
+      request->send(200, F("text/plain"), ok ? ("Recording started: " + fn) : String("Failed to start recording"));
+
+    } else if (request->hasArg("stop")) {
+      bool ok = TimelapseAvi.End();
+      request->send(200, F("text/plain"), ok ? ("Recording stopped: " + TimelapseAvi.GetPath() + " (" + String(TimelapseAvi.GetFrameCount()) + " frames)") : String("Not recording"));
+
+    } else {
+      request->send(400, F("text/plain"), F("Invalid request"));
+    }
+  });
+#endif
+
+#if (defined(ENABLE_PRUSALINK) && (true == ENABLE_PRUSALINK))
+  /* route to read the current PrusaLink printer state (+ auto-timelapse flag) */
+  server.on("/prusalink_status", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    String s = PrusaLink_GetState() + (PrusaLink_GetAutoTimelapse() ? "  [auto-TL ON]" : "  [auto-TL OFF]");
+    request->send(200, F("text/plain"), s);
+  });
+
+  /* route to get / set the PrusaLink printer IP + API key */
+  server.on("/pl_config", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    /* set: ip and/or key provided (blank key keeps the stored one) */
+    if (request->hasParam("ip") || request->hasParam("key")) {
+      String ip = request->hasParam("ip") ? request->getParam("ip")->value() : String("");
+      String key = request->hasParam("key") ? request->getParam("key")->value() : String("");
+      PrusaLink_SetConfig(ip, key);
+      request->send(200, F("text/plain"), F("PrusaLink config saved"));
+      return;
+    }
+
+    /* get: return "ip;keyset" so the form can prefill the IP and show key state */
+    String s = PrusaLink_GetIp() + ";" + (PrusaLink_IsKeySet() ? "1" : "0");
+    request->send(200, F("text/plain"), s);
+  });
+
+  /* route to enable/disable auto timelapse on print */
+  server.on("/pl_auto", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (request->hasArg("on")) {
+      PrusaLink_SetAutoTimelapse(true);
+      request->send(200, F("text/plain"), F("Auto timelapse ON"));
+    } else if (request->hasArg("off")) {
+      PrusaLink_SetAutoTimelapse(false);
+      request->send(200, F("text/plain"), F("Auto timelapse OFF"));
+    } else {
+      request->send(400, F("text/plain"), F("Invalid request"));
+    }
+  });
+#endif
+
+  /* route to enable/disable routine (high-frequency) log messages */
+  server.on("/routine_log", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /routine_log"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (request->hasArg("on")) {
+      SystemLog.SetRoutineLogEnable(true);
+      request->send(200, "text/plain", "Routine log ON");
+    } else if (request->hasArg("off")) {
+      SystemLog.SetRoutineLogEnable(false);
+      request->send(200, "text/plain", "Routine log OFF");
+    } else {
+      request->send(400, "text/plain", "Invalid request");
+    }
+  });
+
   /* route to get temperature */
   server.on("/get_temp", HTTP_GET, [](AsyncWebServerRequest* request) {
     SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: Get get_temp"));
@@ -487,6 +825,87 @@ void Server_InitWebServer_Actions() {
     }
   });
 
+  /* route for digital zoom (OV5640): /zoom?level=100..400, or query current */
+  server.on("/zoom", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /zoom"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    /* reply is always "current,max" (percent) so the UI can bound the slider */
+    if (request->hasParam("level")) {
+      SystemCamera.SetZoom(request->getParam("level")->value().toInt());
+    }
+    request->send(200, F("text/plain"), String(SystemCamera.GetZoom()) + "," + String(SystemCamera.GetMaxZoom()));
+  });
+
+  /* route for pan/tilt of the zoom crop window: /pantilt?pan=0..100&tilt=0..100 */
+  server.on("/pantilt", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /pantilt"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    if (request->hasParam("pan")) {
+      SystemCamera.SetPan(request->getParam("pan")->value().toInt());
+    }
+    if (request->hasParam("tilt")) {
+      SystemCamera.SetTilt(request->getParam("tilt")->value().toInt());
+    }
+    /* persist only on the final (drag-release) update to avoid flash wear */
+    if (request->hasParam("save")) {
+      SystemCamera.SavePanTilt();
+    }
+    /* reply "pan,tilt" (percent) */
+    request->send(200, F("text/plain"), String(SystemCamera.GetPan()) + "," + String(SystemCamera.GetTilt()));
+  });
+
+  /* route to lock exposure/gain at the current auto level (stops AEC hunting) */
+  server.on("/lock_exposure", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /lock_exposure"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    bool ok = SystemCamera.LockExposureToCurrent();
+    request->send(ok ? 200 : 500, F("text/plain"),
+                  ok ? F("Exposure locked to current level") : F("Exposure lock not supported"));
+  });
+
+  /* route to save the current camera image settings as a preset */
+  server.on("/cam_save", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /cam_save"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    bool ok = SystemCamera.SaveSettingsPreset();
+    request->send(ok ? 200 : 500, F("text/plain"),
+                  ok ? F("Camera settings saved") : F("Save failed"));
+  });
+
+  /* route to restore the last saved camera image settings preset */
+  server.on("/cam_load", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /cam_load"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    bool ok = SystemCamera.LoadSettingsPreset();
+    request->send(ok ? 200 : 404, F("text/plain"),
+                  ok ? F("Last saved settings loaded") : F("No saved settings yet"));
+  });
+
+  /* route to recover/reformat the SD card (destructive; POST + confirm) */
+  server.on("/sd_format", HTTP_POST, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Warning, F("WEB server: /sd_format"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+
+    /* require an explicit confirm so it can't be triggered by accident */
+    if (!request->hasParam("confirm", true) || request->getParam("confirm", true)->value() != "yes") {
+      request->send(400, F("text/plain"), F("Missing confirmation"));
+      return;
+    }
+
+    bool ok = SystemLog.FormatCard();
+    request->send(ok ? 200 : 500, F("text/plain"),
+                  ok ? F("SD card recovered / reformatted OK") : F("SD recover failed - card not responding"));
+  });
+
   /* route for change FLASH status */
   server.on("/flash", HTTP_GET, [](AsyncWebServerRequest* request) {
     SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /flash set flash status"));
@@ -530,6 +949,68 @@ void Server_InitWebServer_Actions() {
 
     request->send(200, F("text/plain"), "Starting remove files from SD card");
   });
+
+#if (defined(ENABLE_OV5640_AUTOFOCUS) && (true == ENABLE_OV5640_AUTOFOCUS))
+  /* OV5640 autofocus: trigger a single focus cycle */
+  server.on("/af_single", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /af_single"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == OV5640_AfAvailable()) {
+      request->send(200, F("text/plain"), "Autofocus not available");
+      return;
+    }
+    bool ok = OV5640_AfSingle();
+    request->send(200, F("text/plain"), ok ? "Autofocus (single) triggered" : "Autofocus command failed");
+  });
+
+  /* OV5640 autofocus: enable continuous autofocus */
+  server.on("/af_continuous", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /af_continuous"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == OV5640_AfAvailable()) {
+      request->send(200, F("text/plain"), "Autofocus not available");
+      return;
+    }
+    bool ok = OV5640_AfContinuous();
+    request->send(200, F("text/plain"), ok ? "Continuous autofocus enabled" : "Autofocus command failed");
+  });
+
+  /* OV5640 autofocus: pause continuous autofocus */
+  server.on("/af_pause", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /af_pause"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == OV5640_AfAvailable()) {
+      request->send(200, F("text/plain"), "Autofocus not available");
+      return;
+    }
+    bool ok = OV5640_AfPause();
+    request->send(200, F("text/plain"), ok ? "Autofocus paused" : "Autofocus command failed");
+  });
+
+  /* OV5640 autofocus: release focus (VCM to infinity) */
+  server.on("/af_release", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /af_release"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    if (false == OV5640_AfAvailable()) {
+      request->send(200, F("text/plain"), "Autofocus not available");
+      return;
+    }
+    bool ok = OV5640_AfRelease();
+    request->send(200, F("text/plain"), ok ? "Autofocus released" : "Autofocus command failed");
+  });
+
+  /* OV5640 autofocus: read current AF status */
+  server.on("/af_status", HTTP_GET, [](AsyncWebServerRequest* request) {
+    SystemLog.AddEvent(LogLevel_Verbose, F("WEB server: /af_status"));
+    if (Server_CheckBasicAuth(request) == false)
+      return;
+    request->send(200, F("text/plain"), OV5640_AfStatusText());
+  });
+#endif
 }
 
 /**
@@ -1148,7 +1629,15 @@ void Server_handleCacheRequest(AsyncWebServerRequest* request, const char* conte
     memcpy(buffer, dataStart, chunkSize); // copy chunk of data to buffer
     return chunkSize; // return chunk size
   });
-  response->addHeader("Cache-Control", "public, max-age=" + String(WEB_CACHE_INTERVAL));
+
+  /* HTML pages change with the firmware, so don't cache them - otherwise a
+     firmware update doesn't show until the browser cache expires (24h) or the
+     user hard-refreshes. Static assets (JS/CSS/icons) keep the long cache. */
+  if (strcmp(contentType, "text/html") == 0) {
+    response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  } else {
+    response->addHeader("Cache-Control", "public, max-age=" + String(WEB_CACHE_INTERVAL));
+  }
   request->send(response);
 }
 
@@ -1233,13 +1722,17 @@ String Server_GetJsonData() {
   doc_json["net_dns"] = SystemWifiMngt.GetNetStaticDns();
   doc_json["image_rotation"] = SystemCamera.GetCameraImageRotation();
   doc_json["timelaps"] = Server_TranslateBoolToString(Connect.GetTimeLapsPhotoSaveStatus());
-  doc_json["sd_status"] = (SystemLog.GetCardDetectedStatus() == true) ? F("Card detected") : F("No card detected");
+  doc_json["sd_status"] = (SystemLog.GetCardDetectedStatus() == true) ? F("Card detected")
+                          : (SystemLog.GetCardMountFailed() == true) ? F("Corrupt - use Recover/Reformat below")
+                          : F("No card detected");
   doc_json["sd_total"] = SystemLog.GetCardSizeMB();
   doc_json["sd_free_p"] = SystemLog.GetFreeSpacePercent();
   doc_json["sd_used_p"] = SystemLog.GetUsedSpacePercent();
   doc_json["mcu_temp"] = String(McuTemperature.TemperatureCelsius) + " *C";
   doc_json["sw_build"] = SW_BUILD;
   doc_json["sw_ver"] = SW_VERSION;
+  doc_json["sw_variant"] = String(FW_VARIANT) + " (" + String(FW_VARIANT_VERSION) + ")";
+  doc_json["routine_log"] = Server_TranslateBoolToString(SystemLog.GetRoutineLogEnable());
   doc_json["sw_new_ver"] = FirmwareUpdate.NewVersionFw;
   doc_json["extsens_stat"] = ExternalTemperatureSensor.GetSensorStatus();
   doc_json["extsen_en"] = ExternalTemperatureSensor.GetUserEnableSensor();

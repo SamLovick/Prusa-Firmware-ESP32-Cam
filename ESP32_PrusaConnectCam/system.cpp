@@ -10,6 +10,7 @@
 */
 
 #include "system.h"
+#include "prusalink.h"
 
 /**
    @brief Function for init system library
@@ -110,6 +111,11 @@ void System_Main() {
 
   /* task for download and flash FW from server */
   System_OtaCloudUpdate();
+
+#if (defined(ENABLE_PRUSALINK) && (true == ENABLE_PRUSALINK))
+  /* poll printer print-state (rate-limited internally) */
+  PrusaLink_Poll();
+#endif
 }
 
 /**
@@ -121,6 +127,14 @@ void System_Main() {
    @return none
 */
 void System_CheckNewVersion() {
+#if (defined(ENABLE_OTA_CLOUD_UPDATE) && (false == ENABLE_OTA_CLOUD_UPDATE))
+  /* GitHub OTA update disabled for this bespoke firmware */
+  FirmwareUpdate.CheckNewVersionAfterBoot = true;
+  FirmwareUpdate.CheckNewVersionFwStatus = F("OTA cloud update disabled");
+  FirmwareUpdate.NewVersionFw = F("Disabled");
+  FirmwareUpdate.OtaUpdateFwAvailable = false;
+  return;
+#else
   if (WL_CONNECTED == WiFi.status()) {
     SystemLog.AddEvent(LogLevel_Info, F("Check new FW version from OTA"));
     FirmwareUpdate.CheckNewVersionAfterBoot = true;
@@ -206,14 +220,20 @@ void System_CheckNewVersion() {
       }
     }
   }
+#endif // ENABLE_OTA_CLOUD_UPDATE
 }
 
 /**
-   @brief Function for check start OTA update from WEB server 
+   @brief Function for check start OTA update from WEB server
    @param none
    @return none
 */
 void System_OtaCloudUpdate() {
+#if (defined(ENABLE_OTA_CLOUD_UPDATE) && (false == ENABLE_OTA_CLOUD_UPDATE))
+  /* GitHub cloud update disabled - ignore any pending cloud-update request */
+  FirmwareUpdate.StartOtaUpdate = false;
+  return;
+#else
   if (true == FirmwareUpdate.StartOtaUpdate) {
     FirmwareUpdate.Processing = true;
     FirmwareUpdate.StartOtaUpdate = false;
@@ -222,6 +242,7 @@ void System_OtaCloudUpdate() {
     FirmwareUpdate.UpdatingStatus = F("Start updating");
     System_OtaUpdateStart();
   }
+#endif // ENABLE_OTA_CLOUD_UPDATE
 }
 
 /**
@@ -627,13 +648,13 @@ void System_TaskSystemTelemetry(void *pvParameters) {
     if (SystemCamera.GetStreamStatus()) {
       char buf[80] = { '\0' };
       sprintf(buf, "Stream, average data in %dsec. FPS: %.1f, Size: %uKB", (TASK_SYSTEM_TELEMETRY / SECOND_TO_MILISECOND), SystemCamera.StreamGetFrameAverageFps(), SystemCamera.StreamGetFrameAverageSize());
-      SystemLog.AddEvent(LogLevel_Info, buf);
+      SystemLog.AddEventRoutine(LogLevel_Info, buf);
       SystemCamera.StreamClearFrameData();
     }
 
-    SystemLog.AddEvent(LogLevel_Info, "Free RAM: " + String(ESP.getFreeHeap()) + " B" + ", Min: " + String(ESP.getMinFreeHeap()));
-    SystemLog.AddEvent(LogLevel_Info, "Free PSRAM: " + String(ESP.getFreePsram()) + " B" + ", Min: " + String(ESP.getMinFreePsram()));
-    SystemLog.AddEvent(LogLevel_Info, "MCU Temperature: " + String(McuTemperature.TemperatureCelsius) + " *C");
+    SystemLog.AddEventRoutine(LogLevel_Info, "Free RAM: " + String(ESP.getFreeHeap()) + " B" + ", Min: " + String(ESP.getMinFreeHeap()));
+    SystemLog.AddEventRoutine(LogLevel_Info, "Free PSRAM: " + String(ESP.getFreePsram()) + " B" + ", Min: " + String(ESP.getMinFreePsram()));
+    SystemLog.AddEventRoutine(LogLevel_Info, "MCU Temperature: " + String(McuTemperature.TemperatureCelsius) + " *C");
 
     ExternalTemperatureSensor.ReadSensorData();
 

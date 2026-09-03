@@ -149,6 +149,24 @@ String lastTwoChars = command.substring(command.length() - 2);
         log->SetLogLevel((LogLevel_enum) level);
     } 
 
+  } else if (command.startsWith("bootlog") && command.endsWith(";")) {
+    Serial.println(F("----------------- BOOT LOG -----------------"));
+    Serial.print(log->GetBootLog());
+    Serial.println(F("--------------------------------------------"));
+
+  } else if (command.startsWith("errorlog") && command.endsWith(";")) {
+    Serial.println(F("---------------- ERROR LOG -----------------"));
+    Serial.print(log->GetErrorLog());
+    Serial.println(F("--------------------------------------------"));
+
+  } else if (command.startsWith("clearerrorlog") && command.endsWith(";")) {
+    log->ClearErrorLog();
+    log->AddEvent(LogLevel_Info, F("--> Console cleared error log"));
+
+  } else if (command.startsWith("routinelog:") && command.endsWith(";")) {
+    uint8_t en = command.substring(11, command.length() - 1).toInt();
+    log->SetRoutineLogEnable(en != 0);
+
   } else if (command.startsWith("mcureboot") && command.endsWith(";")) {
     log->AddEvent(LogLevel_Warning, F("--> Reboot MCU!"));
     ESP.restart();
@@ -195,6 +213,10 @@ void SerialCfg::PrintAvailableCommands() {
   Serial.println(F("setflash;               - enable/disable LED flash"));
   Serial.println(F("setlight;               - enable/disable LED light"));
   Serial.println(F("loglevel:LEVEL;         - set log level. 0=Error, 1=Warning, 2=Info, 3=Verbose"));
+  Serial.println(F("bootlog;                - print the captured boot log"));
+  Serial.println(F("errorlog;               - print the captured error/warning log"));
+  Serial.println(F("clearerrorlog;          - clear the error/warning log"));
+  Serial.println(F("routinelog:0/1;         - routine (photo/upload/telemetry) messages off/on"));
   Serial.println(F("mcureboot;              - reboot MCU"));
   Serial.println(F("commandslist;           - print available commands"));
   Serial.println(F("-----------------------------------"));

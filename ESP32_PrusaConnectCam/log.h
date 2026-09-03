@@ -15,6 +15,7 @@
 
 #include "micro_sd.h"
 #include "log_level.h"
+#include "mcu_cfg.h"
 
 class Logs : public MicroSd {
 private:
@@ -27,6 +28,13 @@ private:
   File LogFile;               ///< log file object
   bool LogFileOpened;         ///< log file opened status
   SemaphoreHandle_t LogMutex; ///< log mutex
+
+  String BootLog = "";                                   ///< captured boot messages (until boot complete)
+  bool BootComplete = false;                             ///< true once boot finished; stop capturing boot log
+  String ErrorLog = "";                                  ///< captured error/warning messages (ring buffer)
+  bool RoutineEnable = LOG_ROUTINE_MESSAGES_DEFAULT;     ///< enable/disable routine (high-frequency) messages
+
+  void CaptureBuffers(const String&, LogLevel_enum);     ///< append a logged message to the boot / error buffers
 
 public:
   Logs();
@@ -42,6 +50,18 @@ public:
   void LogCheckOpenedFile();
   void AddEvent(LogLevel_enum, String, bool = true, bool = true);
   void AddEvent(LogLevel_enum, const __FlashStringHelper*, String, bool = true, bool = true);
+
+  /* Routine (high-frequency) messages - only logged when routine logging is enabled */
+  void AddEventRoutine(LogLevel_enum, String, bool = true, bool = true);
+  void AddEventRoutine(LogLevel_enum, const __FlashStringHelper*, String, bool = true, bool = true);
+
+  void MarkBootComplete();          ///< stop capturing to the boot log
+  String GetBootLog();              ///< get captured boot messages
+  String GetErrorLog();             ///< get captured error/warning messages
+  void ClearErrorLog();             ///< clear the error/warning buffer
+  void SetRoutineLogEnable(bool);   ///< enable/disable routine messages
+  bool GetRoutineLogEnable();       ///< get routine messages state
+
   void SetLogLevel(LogLevel_enum);
   void SetFileName(String);
   void SetFilePath(String);

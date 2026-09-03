@@ -63,6 +63,9 @@ private:
 
   bool CameraCaptureSuccess; ///< camera capture success
   bool PhotoSending;         ///< photo sending
+  uint16_t zoom;             ///< digital zoom percent (100 = 1.0x)
+  uint8_t panPos;            ///< pan position 0..100 (50 = centred) for the zoom crop window
+  uint8_t tiltPos;           ///< tilt position 0..100 (50 = centred) for the zoom crop window
 
   /* OV2640 camera module pinout and cfg*/
   camera_config_t CameraConfig;             ///< camera configuration
@@ -85,6 +88,10 @@ private:
   Logs *log;                                ///< pointer to Logs object
 
   void InitCameraModule();
+  void InitAutofocus();
+  void ApplySoftwareZoom();
+  void LoadPtzFromNvs();
+  void SavePtzToNvs();
 
 public:
   Camera(Configuration*, Logs*, int8_t);
@@ -93,6 +100,19 @@ public:
   void ApplyCameraCfg();
   void LoadCameraCfgFromEeprom();
   void ReinitCameraModule();
+  bool LockExposureToCurrent();
+  bool SaveSettingsPreset();
+  bool LoadSettingsPreset();
+  bool HasSettingsPreset();
+  void SetZoom(uint16_t);
+  uint16_t GetZoom();
+  uint16_t GetMaxZoom();
+  void SetPan(uint8_t);
+  void SetTilt(uint8_t);
+  void SavePanTilt();
+  uint8_t GetPan();
+  uint8_t GetTilt();
+  void ApplyZoomWindow();
   void GetCameraModel();
   void CapturePhoto();
   void CaptureStream(camera_fb_t *);
