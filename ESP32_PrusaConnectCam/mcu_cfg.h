@@ -30,7 +30,7 @@
    firmware. Track local modifications with FW_VARIANT_VERSION and CHANGELOG.md. */
 #define SW_VERSION                  "1.1.2"                 ///< upstream base SW version (from GitHub)
 #define FW_VARIANT                  "XIAO ESP32-S3 + OV5640" ///< hardware/feature variant name
-#define FW_VARIANT_VERSION          "1.1.2-xiao-ov5640.40"  ///< variant version - bump on every change, see CHANGELOG.md
+#define FW_VARIANT_VERSION          "1.1.2-xiao-ov5640.41"  ///< variant version - bump on every change, see CHANGELOG.md
 #define SW_BUILD                    __DATE__ " " __TIME__   ///< build number
 #define CONSOLE_VERBOSE_DEBUG       false                   ///< enable/disable verbose debug log level for console
 #define DEVICE_HOSTNAME             "Prusa-ESP32cam"        ///< device hostname

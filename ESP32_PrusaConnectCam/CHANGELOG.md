@@ -17,6 +17,12 @@ Version format: `1.1.2-xiao-ov5640.N`, where `1.1.2` is the upstream base and
 
 ---
 
+## 1.1.2-xiao-ov5640.41 — 2026-08-15
+
+### Changed — default printer IP
+- `PRUSALINK_DEFAULT_IP` is a configurable default: set it to your printer's LAN
+  IP in `mcu_cfg.h`, or leave it and enter the IP in the web UI.
+
 ## 1.1.2-xiao-ov5640.40 — 2026-08-15
 
 ### Changed — "Update from File" button disabled until a valid .bin is chosen
