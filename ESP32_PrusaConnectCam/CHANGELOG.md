@@ -17,6 +17,14 @@ Version format: `1.1.2-xiao-ov5640.N`, where `1.1.2` is the upstream base and
 
 ---
 
+## 1.1.2-xiao-ov5640.42 — 2026-10-30
+
+### Fixed — default printer IP must point at the PRINTER
+- `PRUSALINK_DEFAULT_IP` is the printer's LAN IP, not the camera's - make sure
+  it points at your Prusa printer, or just set the Printer IP in the web UI.
+- A DNS hostname would be cleaner but the EEPROM IP field holds max 15 chars, so
+  use an IPv4 address. Only affects the EEPROM-empty / factory-reset case.
+
 ## 1.1.2-xiao-ov5640.41 — 2026-08-15
 
 ### Changed — default printer IP
