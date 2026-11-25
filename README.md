@@ -12,6 +12,9 @@
 > `ESP32_PrusaConnectCam/mcu_cfg.h` — the committed values are placeholders.
 > Board: `XIAO_ESP32S3`, PSRAM `OPI`, Flash `8MB`, Partition `default_8MB`.
 > Pre-built binaries are **not** committed (they would embed WiFi credentials).
+>
+> **Credit:** independent fork of [prusa3d/Prusa-Firmware-ESP32-Cam](https://github.com/prusa3d/Prusa-Firmware-ESP32-Cam),
+> licensed **GPL-3.0** (see [LICENSE](LICENSE)). Not affiliated with or endorsed by Prusa Research.
 
 This repository includes source code and firmware releases for the **ESP32-cam** module programmed in the **Arduino IDE**. Currently, several versions of boards built on **ESP32/ESP32S3** processors with a camera chip are supported. You can find a list of supported boards below. Additionally, for each supported board, there is a guide on how to upload the firmware, how to compile code for it, some basic information and a list of known issues for this particular board.
 
