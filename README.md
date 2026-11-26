@@ -1,5 +1,7 @@
 # PrusaConnect ESP32-CAM
 
+**As featured on Hackaday:** [Camera Upgrades For 3D Printers](https://hackaday.com/2026/11/25/camera-upgrades-for-3d-printers/) (25 Nov 2026).
+
 > ## ⚡ Variant branch: `xiao-esp32s3-ov5640`
 > This branch is a customised build of the upstream firmware (base **v1.1.2**) for the
 > **Seeed Studio XIAO ESP32-S3 Sense** board fitted with an **OV5640** autofocus camera.
